@@ -122,8 +122,12 @@ export function createMcpCatalog(options: McpCatalogOptions): McpCatalog {
     new McpError("unavailable", `New Relic MCP unavailable for this API key (${current.reason}); ${UNAVAILABLE_HINT}`);
   const expired = (current: Entry, at: number) => at - current.fetchedAt >= 2 * CATALOG_TTL_MS;
 
-  /** Lists the tools; returns the error a caller should see when the region is left non-available. */
-  async function refresh(region: Region, current: Entry, quiet = false): Promise<McpError | undefined> {
+  /**
+   * Lists the tools; returns the error a caller should see when the region is left non-available.
+   * `forced` (doctor, startup probe) is authoritative: no stale-catalog grace (review R-5).
+   */
+  async function refresh(region: Region, current: Entry, forced = false): Promise<McpError | undefined> {
+    const quiet = forced;
     const started = now();
     current.checkedAt = started;
     try {
@@ -136,12 +140,17 @@ export function createMcpCatalog(options: McpCatalogOptions): McpCatalog {
     } catch (error) {
       const failure = error instanceof McpError ? error : new McpError("request_failed", "unexpected error");
       current.lastFailure = failure;
-      // Business Rule 3: a failed refresh keeps the previous catalog for at most one more TTL.
-      if (current.state === "available" && !expired(current, started)) return undefined;
       const noMcp = failure.kind === "unavailable" || failure.kind === "forbidden";
-      if (noMcp || current.state === "available") setState(region, current, "unavailable", reasonOf(failure), failure.status, quiet);
-      else setState(region, current, "unknown", reasonOf(failure), undefined, quiet);
-      return noMcp ? undefined : failure;
+      const transient = !noMcp && failure.kind !== "credential_expired";
+      const wasAvailable = current.state === "available";
+      // Business Rule 3: only the proxy's own refresh, after a transient failure, keeps the previous
+      // catalog, for at most one more TTL, measured with the clock now, after the request (review R-2).
+      if (wasAvailable && transient && !forced && !expired(current, now())) return undefined;
+      if (noMcp || (wasAvailable && !(forced && transient))) {
+        setState(region, current, "unavailable", reasonOf(failure), failure.status, quiet);
+      } else setState(region, current, "unknown", reasonOf(failure), undefined, quiet);
+      // A refusal or an expired grace answers the standard mcp_unavailable text; others keep their error.
+      return noMcp || (wasAvailable && transient && !forced) ? undefined : failure;
     }
   }
 
@@ -164,6 +173,11 @@ export function createMcpCatalog(options: McpCatalogOptions): McpCatalog {
     if (current.refreshing || due) {
       current.refreshing ??= refresh(region, current).finally(() => (current.refreshing = undefined));
       failure = await current.refreshing;
+    }
+    // Re-read the clock after any await: a refresh (ours or one we joined) may cross the limit (R-2).
+    const failed = current.lastFailure;
+    if (current.state === "available" && failed && expired(current, now())) {
+      setState(region, current, "unavailable", reasonOf(failed), failed.status);
     }
     if (current.state === "available") return current;
     throw failure ?? unavailableError(current);

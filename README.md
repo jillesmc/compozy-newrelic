@@ -460,8 +460,10 @@ A remote tool is exposed only when all of these hold:
 - New Relic annotates it `readOnlyHint: true` and not `destructiveHint: true`. A tool without
   annotations is not exposed.
 - It is not OAuth-only. The seed is `natural_language_to_nrql_query` and `search_traces`; a tool
-  whose call fails with `requires OAuth` is learned as OAuth-only for the life of the extension
-  process and logged once (`newrelic: mcp tool <name> requires OAuth; hidden`).
+  whose call fails with `requires OAuth` (an HTTP 403 or a tool error saying so) is learned as
+  OAuth-only for the life of the extension process. Any other 403 on a call means the MCP is
+  unavailable for the key, not that one tool needs OAuth. Each learned tool is logged once
+  (`newrelic: mcp tool <name> requires OAuth; hidden`).
 - The region's MCP is available for the key.
 
 The catalog is cached per region for 10 minutes, so tools New Relic adds or removes appear or
@@ -515,13 +517,16 @@ A remote tool error is not a tool error: the result has `is_error: true`, and `t
 message.
 
 Refusals send no request, and an OAuth-only tool is refused even before the catalog loads. When
-`initialize` answers 403 or 404 the region is `unavailable` and is probed again after 10 minutes;
+`initialize` or `tools/list` answers 403 or 404 (or a call gets a 403 without `requires OAuth`) the
+region is `unavailable` and is probed again after 10 minutes;
 until then both tools answer `mcp_unavailable` at once. After any other probe failure (401, 429,
 5xx, network) the call that probed gets the matching error above, and calls in the next minute get
-`mcp_unavailable` with the same reason. A catalog whose refresh keeps failing is used for at most
-10 more minutes, then the region is `unavailable`. An `initialize` 403 or 404 when a call renews its
-session also makes the region `unavailable`. The doctor and the startup probe share this state: if
-the doctor reports `unavailable`, the next proxy call answers at once without a request. Each region
+`mcp_unavailable` with the same reason. A catalog whose refresh keeps failing (5xx, network,
+timeout) is used for at most 10 more minutes after its last success, then the region is
+`unavailable`. An `initialize` 403 or 404 when a call renews its
+session also makes the region `unavailable`. The doctor and the startup probe share this state and
+override any cached catalog: if the doctor reports `unavailable`, the next proxy call answers at
+once without a request. Each region
 state change seen by the proxy writes one line
 (`newrelic: region=us mcp=available|unavailable(<status>)|unknown`) to
 `compozy extension logs newrelic`. Arguments and results are never logged.

@@ -148,6 +148,24 @@ describe("MCP proxy against the fake Streamable HTTP MCP", () => {
     assert.equal((await toolFailure(h.call("mcp_call", { tool: "list_dashboards" }))).reason, "unknown_tool");
   });
 
+  test("IT-107 unavailable: a doctor 403/404 on a warm catalog is authoritative; nothing is forwarded or learned (R-5)", async () => {
+    for (const status of [403, 404]) {
+      await h.nr.close();
+      h = await startProxyHarness();
+      h.nr.respond = request => (request.path === "/graphql" ? { status: 200, body: { data: { actor: { accounts: [{ id: 1 }] } } } } : undefined);
+      assert.equal(out(await h.call("mcp_tools")).exposed.length, 7);
+      h.nr.mcpFake.status = status;
+      assert.match(String(await h.call("doctor")), new RegExp(`^MCP: unavailable \\(${status} from `, "m"));
+      assert.equal(h.mcp.state(h.nr.region), "unavailable");
+      const sent = h.nr.mcpFake.requests.length;
+      const message = `New Relic MCP unavailable for this API key (${status}); use the ext__newrelic__* NerdGraph tools`;
+      assert.deepEqual(await toolFailure(h.call("mcp_tools")), { code: "mcp_unavailable", message });
+      assert.deepEqual(await toolFailure(h.call("mcp_call", { tool: "list_recent_issues" })), { code: "mcp_unavailable", message });
+      assert.equal(h.nr.mcpFake.requests.length, sent);
+      assert.ok(!h.oauthOnly.has("list_recent_issues"));
+    }
+  });
+
   test("IT-107 unavailable: initialize 404 or 403 → the doctor prints unavailable and both tools return mcp_unavailable with no further request", async () => {
     for (const status of [404, 403]) {
       await h.nr.close();

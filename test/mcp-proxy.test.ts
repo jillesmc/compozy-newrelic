@@ -170,7 +170,8 @@ describe("MCP proxy (unit, fake MCP)", () => {
     await h.call("mcp_tools");
     assert.equal(h.fetches(), failed, "failed refreshes are retried at most once per minute");
     h.advance(CATALOG_TTL_MS - RETRY_MS + 1); // T + 2 TTL
-    assert.deepEqual(await toolFailure(h.call("mcp_tools")), { code: "mcp_request_failed", message: "HTTP 500" });
+    // The grace expiry answers the standard unavailable text (D-19.7).
+    assert.deepEqual(await toolFailure(h.call("mcp_tools")), { code: "mcp_unavailable", message: UNAVAILABLE("500") });
     assert.equal(h.mcp.state(h.nr.region), "unavailable");
     assert.deepEqual(h.lines, [`newrelic: region=${h.nr.region} mcp=available\n`, `newrelic: region=${h.nr.region} mcp=unavailable(500)\n`]);
     const unavailable = h.fetches();

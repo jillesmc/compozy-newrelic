@@ -182,13 +182,18 @@ export const mcpCallTool: ToolDefinition = {
     try {
       remote = await catalog.client(region).callTool(tool, args as Record<string, unknown>, new AbortController().signal);
     } catch (error) {
-      // Business Rule 2: a 403 or a `requires OAuth` JSON-RPC error teaches the OAuth-only set.
-      if (error instanceof McpError && (error.kind === "forbidden" || (error.kind === "rpc" && /requires OAuth/i.test(error.message)))) {
+      // Business Rule 2 as narrowed by D-19.8: a 403 or JSON-RPC error saying `requires OAuth` teaches
+      // the OAuth-only set; any other 403 is region-wide and never teaches a tool.
+      const oauth = error instanceof McpError && (error.kind === "forbidden" || error.kind === "rpc") && /requires OAuth/i.test(error.message);
+      if (oauth) {
         catalog.learnOAuthOnly(tool);
         throw refusal(name, "oauth_only", region);
       }
-      // An initialize 403/404 on a session re-handshake makes the whole region unavailable (review R-5).
-      if (error instanceof McpError && error.kind === "unavailable") throw failure(catalog.markUnavailable(region, error));
+      // A plain 403 on tools/call, or an initialize 403/404 on a session re-handshake, makes the whole
+      // region unavailable (review R-5).
+      if (error instanceof McpError && (error.kind === "unavailable" || error.kind === "forbidden")) {
+        throw failure(catalog.markUnavailable(region, error));
+      }
       // A JSON-RPC error from the tool is relayed as a remote tool error (Integration Points).
       if (!(error instanceof McpError && error.kind === "rpc")) throw failure(error);
       remote = { content: [{ type: "text", text: error.message }], isError: true };

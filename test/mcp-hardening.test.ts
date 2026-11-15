@@ -91,6 +91,36 @@ describe("MCP proxy hardening (review R-1..R-6)", () => {
     assert.ok(RETRY_MS > 2, "the retry throttle is what used to hide the expiry");
   });
 
+  test("UT-160 catalog (R-2): a refresh that crosses 2×TTL while in flight forwards nothing", async () => {
+    await h.call("mcp_tools"); // loaded at t0
+    h.nr.respond = request => {
+      if ((request.body as { method?: string }).method !== "tools/list") return undefined;
+      h.advance(2); // the deadline passes while tools/list is in flight
+      return { status: 500 };
+    };
+    h.advance(2 * CATALOG_TTL_MS - 1);
+    assert.deepEqual(await toolFailure(h.call("mcp_call", { tool: "list_recent_issues" })), {
+      code: "mcp_unavailable",
+      message: "New Relic MCP unavailable for this API key (500); use the ext__newrelic__* NerdGraph tools",
+    });
+    assert.equal(h.nr.mcpFake.requests.filter(request => request.method === "tools/call").length, 0);
+    assert.equal(h.mcp.state(h.nr.region), "unavailable");
+  });
+
+  test("UT-152 learn (R-5): a tools/call 403 without 'requires OAuth' makes the region unavailable and teaches nothing", async () => {
+    await h.call("mcp_tools");
+    h.nr.respond = request =>
+      (request.body as { method?: string }).method === "tools/call" ? { status: 403, body: { error: "account has no MCP access" } } : undefined;
+    const message = "New Relic MCP unavailable for this API key (403); use the ext__newrelic__* NerdGraph tools";
+    assert.deepEqual(await toolFailure(h.call("mcp_call", { tool: "list_recent_issues" })), { code: "mcp_unavailable", message });
+    assert.ok(!h.oauthOnly.has("list_recent_issues"));
+    assert.ok(!h.lines.some(line => line.includes("requires OAuth")));
+    assert.equal(h.mcp.state(h.nr.region), "unavailable");
+    const sent = h.nr.mcpFake.requests.length;
+    assert.deepEqual(await toolFailure(h.call("mcp_tools")), { code: "mcp_unavailable", message });
+    assert.equal(h.nr.mcpFake.requests.length, sent);
+  });
+
   test("UT-192 redirects (R-4): a 3xx from the MCP or NerdGraph endpoint never sends the key to another origin", async () => {
     const seen: IncomingHttpHeaders[] = [];
     const other = await listen((headers, res) => {

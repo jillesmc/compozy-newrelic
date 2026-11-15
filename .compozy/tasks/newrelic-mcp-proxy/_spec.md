@@ -477,3 +477,22 @@ S2 and S3 can run in parallel after S1.
      descriptions, schema types), content placeholders and the learned OAuth-only stderr line are
      redacted before they are normalized, sanitized or shortened. The catalog takes the key redactor
      as an injected option, so it still reads no environment.
+  7. **Authoritative probes and grace measured after the request** (review round 2, R-2 and R-5).
+     - Stale-catalog grace applies only to the proxy's own TTL refresh after a transient failure
+       (5xx, network, timeout, 429, unexpected response). It is measured with the clock after the
+       failed request, and `ensure` re-reads the clock after every await before it returns
+       exposure. A refresh that crosses two TTLs in flight therefore forwards nothing.
+     - A refusal (initialize or `tools/list` 403/404, or 401) is never graced. A forced probe (doctor,
+       startup) is never graced either: its refusal clears the shared region state and catalog even
+       when a previous catalog exists, and its transient failure makes a warm region `unknown`,
+       re-probed within a minute.
+     - When a grace expires, or a refusal makes the region `unavailable`, the call gets the standard
+       `mcp_unavailable` text. The call that probes a cold region after a transient failure still
+       gets its own error, as in D-13.2. UT-160's call at T + 2 TTL now gets `mcp_unavailable`
+       instead of `mcp_request_failed: HTTP 500`.
+  8. **Business Rule 2 narrowed: a 403 teaches OAuth-only only when it says so** (review round 2,
+     R-5; Integration Points "403 with `requires OAuth` → learn"). A `tools/call` HTTP 403 is learned
+     as OAuth-only only when its (redacted) body contains `requires OAuth` (case-insensitive). Any
+     other 403 on `tools/call` is region-wide: the region becomes `unavailable` (standard
+     `mcp_unavailable` text, re-probed after one TTL), and no tool is learned. Learning from a
+     JSON-RPC error or an `isError` result containing `requires OAuth` (BR-2, D-12) is unchanged.

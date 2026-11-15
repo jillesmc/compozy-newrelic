@@ -113,17 +113,19 @@ export async function startProxyHarness() {
     return fetch(url, init);
   }) as typeof fetch;
   const stderr = { write: (line: string) => lines.push(line) };
+  const oauthOnly = new Set<string>(OAUTH_ONLY_SEED);
   const mcp = createMcpCatalog({
     client: region => createMcpClient(region, FAKE_KEY, { fetch: countingFetch }),
     now: () => clock,
     stderr,
-    oauthOnly: new Set(OAUTH_ONLY_SEED),
+    oauthOnly,
     redact: redactor(FAKE_KEY),
   });
   const deps = { env: { NEW_RELIC_API_KEY: FAKE_KEY }, fetch: countingFetch, now: () => new Date(clock), stderr, mcp };
   return {
     nr,
     mcp,
+    oauthOnly,
     deps,
     lines,
     fetches: () => fetches,

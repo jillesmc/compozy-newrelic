@@ -57,15 +57,37 @@ function assertBounded(result: ToolResult): void {
 const range = (n: number) => Array.from({ length: n }, (_, i) => i);
 
 describe("investigation tools", () => {
+  test("UT-180 nrql_query: nested aggregates become dotted scalar keys, to a depth of 3", async () => {
+    const out = await run(nrqlQueryTool, { account_id: ACCOUNT, nrql: "SELECT percentile(duration, 95) FROM Transaction" }, () => [
+      {
+        "percentile.duration": { "95": 2.31 },
+        stats: { a: { b: { c: 1, d: { e: 2 } } }, list: [1, 2], empty: {} },
+      },
+    ]);
+    assert.deepEqual(out.rows, [
+      {
+        "percentile.duration.95": 2.31,
+        "stats.a.b.c": 1,
+        "stats.a.b.d": '{"e":2}',
+        "stats.list": "[1,2]",
+        "stats.empty": "{}",
+      },
+    ]);
+    assert.equal(
+      out.result.content?.[0]?.text,
+      ["percentile.duration.95 | stats.a.b.c | stats.a.b.d | stats.list | stats.empty", '2.31 | 1 | {"e":2} | [1,2] | {}'].join("\n")
+    );
+  });
+
   test("UT-090 nrql_query: compact table of at most 50 rows within 8 KiB, truncated when cut", async () => {
     const small = await run(nrqlQueryTool, { account_id: ACCOUNT, nrql: "SELECT count(*) FROM Transaction FACET appName" }, () => [
       { facet: "checkout-api", appName: "checkout-api", count: 12 },
       { facet: "cart", appName: "cart", count: 3, "percentile.duration": { "95": 1.5 } },
     ]);
     assert.equal(small.result.content?.[0]?.text, [
-      "facet | appName | count | percentile.duration",
+      "facet | appName | count | percentile.duration.95",
       "checkout-api | checkout-api | 12 | ",
-      'cart | cart | 3 | {"95":1.5}',
+      "cart | cart | 3 | 1.5",
     ].join("\n"));
     assert.equal(small.result.truncated, false);
     assert.deepEqual(small.calls[0]?.variables, { id: ACCOUNT });

@@ -30,13 +30,12 @@ official MCP. The extension has nine tools including the doctor, and never write
 Install it for all projects:
 
 ```bash
-compozy extension install github:jillesmc/compozy-newrelic@v0.1.0 --scope global --allow-unverified --yes
+compozy extension install github:jillesmc/compozy-newrelic@v0.2.0 --allow-unverified --yes
 ```
 
-`--scope global` is required for a global install: the packaged MCP servers default to workspace
-scope, and without an explicit scope the install fails with
-`invalid manifest field "workspace_id": workspace scope requires a workspace`. To install into a
-single project instead, use `--scope workspace --workspace <id|name|path>`.
+Without `--scope` the install is global: the packaged MCP servers default to global scope (v0.1.0
+needed `--scope global`). To install into a single project instead, add
+`--scope workspace --workspace <id|name|path>`.
 
 The consent flags are required: GitHub installs are not catalog-verified, so CompozyOS refuses them
 with `extension_checksum_unverified` unless you pass `--allow-unverified` (`--yes` skips the prompt).
@@ -402,7 +401,7 @@ default, or `eu`).
 
 | Tool | Input | Returns |
 | --- | --- | --- |
-| `ext__newrelic__nrql_query` | `account_id`, `nrql` | Up to 50 rows as a compact table. |
+| `ext__newrelic__nrql_query` | `account_id`, `nrql` | Up to 50 rows as a compact table; nested aggregates become dotted columns (`percentile.duration.95`). |
 | `ext__newrelic__list_accounts` | — | Up to 50 `{id, name}`. |
 | `ext__newrelic__search_entities` | `query` (a name, or a NerdGraph entity search such as `domain = 'APM' AND name LIKE 'checkout'`) | Up to 25 `{guid, name, type, domain, alert_severity}`. |
 | `ext__newrelic__alert_issues` | `account_id`, `state?` (`open` default, `closed`, `all`), `priorities?`, `since?` (≤ `24h`) | Up to 25 `{id, title, priority, state, entities, opened_at, url}`, highest priority and newest first. |
@@ -499,12 +498,13 @@ in with OAuth only if agents need the OAuth-only tools, once per scope, when the
 `MCP: available`:
 
 ```bash
-compozy mcp auth login newrelic --owner extension:newrelic --scope workspace --workspace my-project
+compozy mcp auth login newrelic --owner extension:newrelic
 # EU accounts:
-compozy mcp auth login newrelic-eu --owner extension:newrelic --scope workspace --workspace my-project
+compozy mcp auth login newrelic-eu --owner extension:newrelic
 ```
 
-Use the scope where you installed the extension (`--scope user` for a global install). After a
+Use the scope where you installed the extension: the default `--scope user` matches a global
+install; for a workspace install add `--scope workspace --workspace my-project`. After a
 successful login the server's tools become callable for sessions in that scope, even with
 `tools.policy.external_default = "disabled"`. `compozy mcp auth logout` withdraws them.
 

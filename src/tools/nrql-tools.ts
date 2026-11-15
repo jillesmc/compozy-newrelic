@@ -2,7 +2,7 @@ import { paramsError } from "../errors.ts";
 import { isoUtc, truncateChars } from "../items.ts";
 import { normalizeMessage } from "../normalize.ts";
 import { parseWindow, requiredString, sinceClause } from "../params.ts";
-import { boundedResult, cell, renderLines, renderTable, type Row } from "./format.ts";
+import { boundedResult, cell, flattenRow, renderLines, renderTable, type Row } from "./format.ts";
 import { ACCOUNT_PROPERTIES, accountId, type NerdGraphTool } from "./tool.ts";
 
 export const MAX_NRQL_ROWS = 50;
@@ -23,7 +23,7 @@ export const nrqlQueryTool: NerdGraphTool = {
   },
   async run(input, ctx) {
     const nrql = requiredString(input.nrql, "nrql");
-    const results = await ctx.client.nrql(accountId(input), nrql, ctx.signal);
+    const results = (await ctx.client.nrql(accountId(input), nrql, ctx.signal)).map(flattenRow);
     const columns = [...new Set(results.flatMap(row => Object.keys(row)))];
     const rows = results.map(row => Object.fromEntries(columns.map(column => [column, cell(row[column])])));
     return boundedResult({ rows, cap: MAX_NRQL_ROWS, columns, render: renderTable });

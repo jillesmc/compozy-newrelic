@@ -5,11 +5,13 @@
  * cannot emit these. `scripts/package.ts` appends `mcpServersToml()` to the built generation's
  * extension.toml. Pre-registered public client: New Relic publishes a fixed client id (PKCE S256, no
  * secret); its DCR endpoint returns that same id, so dynamic registration adds nothing.
+ * `default_scope = "global"` lets a plain `compozy extension install` (no `--scope`) install for all
+ * projects; `--scope workspace` still selects one workspace (spec deviation D-16).
  */
 export interface McpServerDeclaration {
   transport: "http";
   url: string;
-  default_scope: "workspace";
+  default_scope: "global";
   auth: {
     method: "oauth";
     registration: "pre_registered";
@@ -28,8 +30,8 @@ const AUTH: McpServerDeclaration["auth"] = {
 };
 
 export const MCP_SERVERS: Readonly<Record<string, McpServerDeclaration>> = {
-  newrelic: { transport: "http", url: "https://mcp.newrelic.com/mcp/", default_scope: "workspace", auth: AUTH },
-  "newrelic-eu": { transport: "http", url: "https://mcp.eu.newrelic.com/mcp/", default_scope: "workspace", auth: AUTH },
+  newrelic: { transport: "http", url: "https://mcp.newrelic.com/mcp/", default_scope: "global", auth: AUTH },
+  "newrelic-eu": { transport: "http", url: "https://mcp.eu.newrelic.com/mcp/", default_scope: "global", auth: AUTH },
 };
 
 const str = (value: string): string => JSON.stringify(value);

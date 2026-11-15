@@ -26,6 +26,26 @@ export function cell(value: unknown): JSONValue {
   return truncateChars(text, MAX_CELL_CHARS);
 }
 
+/** Nested-object levels `flattenRow` expands into dotted keys (US-108). */
+export const MAX_FLATTEN_DEPTH = 3;
+
+/**
+ * Flattens nested objects into dotted keys, `{"percentile.duration": {"95": 2.31}}` →
+ * `{"percentile.duration.95": 2.31}`, expanding up to MAX_FLATTEN_DEPTH levels. Deeper values, arrays
+ * and empty objects stay as they are (and `cell` renders them as compact JSON).
+ */
+export function flattenRow(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const walk = (key: string, value: unknown, level: number): void => {
+    const nested = value !== null && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length > 0;
+    if (nested && level < MAX_FLATTEN_DEPTH) {
+      for (const [inner, child] of Object.entries(value)) walk(`${key}.${inner}`, child, level + 1);
+    } else out[key] = value;
+  };
+  for (const [key, value] of Object.entries(row)) walk(key, value, 0);
+  return out;
+}
+
 /** One row per line, `col=value` pairs joined by ` | `; `columns` fixes the order. */
 export function renderLines(rows: Row[], columns: string[]): string {
   return rows

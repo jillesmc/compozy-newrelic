@@ -364,3 +364,37 @@ S2 and S3 can run in parallel after S1.
   Tools hidden as not read-only are not printed. The unavailable and unknown lines keep their v0.1
   text. A 401 at initialize is still printed as `unavailable (401 …)` (v0.1 UT-101), while the proxy
   tools map it to `credential_expired`. The startup probe line format is unchanged.
+- **D-16 (2026-11-15, S3, recorded before coding): US-107 outcome — the OAuth servers default to
+  global scope, and a plain install is global.** Investigated in the CompozyOS v0.7.0 source (tag
+  `v0.7.0`, paths under `internal/`):
+  1. The v0.1 failure comes from the install default, not from validation. With no `--scope` and no
+     `--workspace`, the CLI sends an empty scope and workspace (`cli/extension.go`
+     `resolveExtensionCLIScope`, which resolves a workspace only for `--scope workspace` or
+     `--workspace`). For an operator actor (CLI ingress is a trusted human operator,
+     `task/actors.go:29-50`), `applyManifestInstallScope` (`daemon/extensions_scope.go:130-153`) reads
+     the manifest servers' `default_scope` and only when it is `workspace` re-resolves the target as
+     workspace scope, which fails outside a workspace (`daemon/extensions_scope.go:38-42`,
+     `workspace scope requires a workspace`; CompozyOS test "Should require workspace context for a
+     workspace default", `daemon/extensions_test.go:1782`). An empty or `global` default leaves the
+     target global (`extensions_scope.go:137-150`). Mixed defaults require an explicit scope
+     (`:143-144`).
+  2. `default_scope` accepts only `""`, `global` or `workspace`
+     (`extension/manifest_mcp_auth.go:29-33`). It is otherwise display-only
+     (`extension/marketplace_inspection.go:95`, `extension/manifest_tools.go:21`); the runtime server
+     spec does not read it (`extension/resource_publication_mcp.go:86`).
+  3. OAuth sign-in follows the install scope, not `default_scope`: the auth target is derived from
+     the published resource's scope (`daemon/mcp_server_resolver.go:205-255`: user resource or
+     default profile → `user`; workspace resource → `workspace` + workspace id).
+     `compozy mcp auth login` defaults to `--scope user` (`cli/mcp_auth.go:56`) and requires
+     `--workspace` with `--scope workspace` (`cli/mcp_auth.go:280-286`). So login per scope still
+     works: `--scope user` for a global install, `--scope workspace --workspace <ws>` for a workspace
+     one.
+
+  Change: both servers declare `default_scope = "global"` (`src/mcp-servers.ts`, UT-110). The README
+  drops the required `--scope global`; `--scope workspace --workspace <ws>` stays as the per-project
+  option, and the OAuth login example uses the default `--scope user`. E2E-104 confirms it on a clean
+  0.7.0 profile with and without `--scope`.
+- **D-17 (2026-11-15, S3, recorded before coding): US-108 depth.** "Depth 3" counts expanded object
+  levels below a result column: `a: {b: {c: {d: {e: 1}}}}` becomes `a.b.c.d: {"e":1}`. Arrays and
+  empty objects are not expanded; they stay compact JSON cells. Flattening applies only to
+  `nrql_query`, before the existing column, cell (300 characters) and 8 KiB bounds.

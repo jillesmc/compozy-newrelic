@@ -49,8 +49,8 @@ describe("manifest", () => {
 
   test("UT-110 manifest: OAuth MCP servers newrelic and newrelic-eu use the pre-registered public client, no headers", () => {
     assert.deepEqual(MCP_SERVERS, {
-      newrelic: { transport: "http", url: "https://mcp.newrelic.com/mcp/", default_scope: "workspace", auth: AUTH },
-      "newrelic-eu": { transport: "http", url: "https://mcp.eu.newrelic.com/mcp/", default_scope: "workspace", auth: AUTH },
+      newrelic: { transport: "http", url: "https://mcp.newrelic.com/mcp/", default_scope: "global", auth: AUTH },
+      "newrelic-eu": { transport: "http", url: "https://mcp.eu.newrelic.com/mcp/", default_scope: "global", auth: AUTH },
     });
     const toml = mcpServersToml();
     assert.doesNotMatch(toml, /headers|api[-_]key|secret/i);
@@ -61,7 +61,7 @@ describe("manifest", () => {
             `[resources.mcp_servers.${name}]`,
             'transport = "http"',
             `url = "${url}"`,
-            'default_scope = "workspace"',
+            'default_scope = "global"',
             "",
             `[resources.mcp_servers.${name}.auth]`,
             'method = "oauth"',

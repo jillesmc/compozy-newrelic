@@ -7,7 +7,7 @@ import { createPollHandler, type PollDeps } from "./poll.ts";
 import { SOURCES } from "./sources/index.ts";
 import { createProxyCatalog, toolHandler, TOOLS, type ToolDeps } from "./tools/index.ts";
 
-export const EXTENSION_VERSION = "0.1.0";
+export const EXTENSION_VERSION = "0.2.0";
 /**
  * Supported CompozyOS floor. The TS SDK 0.7.0 describe payload still carries its stale built-in floor
  * "0.3.0-beta.1" and `compozy extension build` stamps extension.toml from it, so it is set here.

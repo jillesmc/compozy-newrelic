@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { HeartbeatSourceRequest, HeartbeatSourceResult, JSONValue, ToolResult } from "@compozy/extension-sdk";
 
 import { SourceError } from "../src/errors.ts";
+import { redactor } from "../src/items.ts";
 import { createMcpCatalog, OAUTH_ONLY_SEED } from "../src/mcp-catalog.ts";
 import { createMcpClient } from "../src/mcp-client.ts";
 import type { NerdGraphClient } from "../src/nerdgraph.ts";
@@ -117,6 +118,7 @@ export async function startProxyHarness() {
     now: () => clock,
     stderr,
     oauthOnly: new Set(OAUTH_ONLY_SEED),
+    redact: redactor(FAKE_KEY),
   });
   const deps = { env: { NEW_RELIC_API_KEY: FAKE_KEY }, fetch: countingFetch, now: () => new Date(clock), stderr, mcp };
   return {

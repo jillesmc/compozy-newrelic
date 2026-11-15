@@ -24,7 +24,8 @@ error mapping and the loopback test approach.
 - Only `src/index.ts` imports the SDK `Extension` and reads environment variables; only
   `src/nerdgraph.ts`, `src/mcp-client.ts` and `src/doctor.ts` do network I/O.
 - `src/sources/**` and `src/engine.ts` never import `mcp-client` or `mcp-catalog` (UT-123).
-- Never log, return, or persist `NEW_RELIC_API_KEY`. Never send NerdGraph mutations. Only the proxy
+- Never log, return, or persist `NEW_RELIC_API_KEY`; redact remote text before shortening it, and
+  never follow redirects with the key (`redirect: "manual"`). Never send NerdGraph mutations. Only the proxy
   (`src/tools/mcp-proxy.ts`) calls MCP tools, and only exposed read-only ones.
 - Items and tool results stay compact and bounded; never include raw log lines or stack traces.
 - Keep source files cohesive and small (< 300 lines); extract before growing.

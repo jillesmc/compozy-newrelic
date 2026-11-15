@@ -18,10 +18,12 @@ const MAX_TOOL_NAME_CHARS = 200;
 
 /** The catalog shared by both proxy tools; index.ts builds one per process. */
 export function createProxyCatalog(deps: ToolDeps): McpCatalog {
+  const apiKey = () => resolveApiKey(deps.env ?? {}); // resolved on first use; callers check it first
   return createMcpCatalog({
-    client: region => createMcpClient(region, resolveApiKey(deps.env ?? {}), { fetch: deps.fetch }),
+    client: region => createMcpClient(region, apiKey(), { fetch: deps.fetch }),
     now: () => (deps.now?.() ?? new Date()).getTime(),
     stderr: deps.stderr,
+    redact: text => redactor(apiKey())(text),
   });
 }
 
@@ -68,27 +70,32 @@ function result(value: Record<string, JSONValue>, text: string, truncated: boole
   return { content: [{ type: "text", text }], structured: value, truncated, bytes: byteLength(text), duration_ms: 0 };
 }
 
-/** `prop: "type — description"` per input property (description ≤ 80 characters). */
-export function compactSchema(schema: unknown): Record<string, string> {
+const identity = (text: string) => text;
+
+/**
+ * `prop: "type — description"` per input property (description ≤ 80 characters). Remote text is
+ * redacted before it is normalized or shortened (review R-3).
+ */
+export function compactSchema(schema: unknown, redact: (text: string) => string = identity): Record<string, string> {
   const properties = (schema as { properties?: unknown } | undefined)?.properties;
   if (!properties || typeof properties !== "object") return {};
   return Object.fromEntries(
     Object.entries(properties as Record<string, { type?: unknown; description?: unknown }>).map(([name, property]) => {
       const raw = property?.type;
-      const type = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.join("|") : "any";
-      const description = typeof property?.description === "string" ? oneLine(property.description) : "";
-      return [name, description ? `${type} — ${truncateChars(description, MAX_PROPERTY_CHARS)}` : type];
+      const type = redact(typeof raw === "string" ? raw : Array.isArray(raw) ? raw.join("|") : "any");
+      const description = typeof property?.description === "string" ? oneLine(redact(property.description)) : "";
+      return [redact(name), description ? `${type} — ${truncateChars(description, MAX_PROPERTY_CHARS)}` : type];
     })
   );
 }
 
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
 
-function row(tool: McpToolDef): Record<string, JSONValue> {
+function row(tool: McpToolDef, redact: (text: string) => string): Record<string, JSONValue> {
   return {
-    name: tool.name,
-    description: truncateChars(oneLine(tool.description ?? ""), MAX_DESCRIPTION_CHARS),
-    input: compactSchema(tool.inputSchema),
+    name: redact(tool.name),
+    description: truncateChars(oneLine(redact(tool.description ?? "")), MAX_DESCRIPTION_CHARS),
+    input: compactSchema(tool.inputSchema, redact),
   };
 }
 
@@ -119,7 +126,7 @@ export const mcpToolsTool: ToolDefinition = {
         {
           region,
           state: catalog.state(region),
-          exposed: tools.slice(0, limit).map(row),
+          exposed: tools.slice(0, limit).map(tool => row(tool, redact)),
           hidden: { ...catalog.hidden(region) },
           truncated: tools.length > limit,
         },
@@ -133,10 +140,10 @@ export const mcpToolsTool: ToolDefinition = {
 };
 
 /** One-line stand-in for a non-text content part (Business Rule 6). */
-function placeholder(part: Record<string, unknown>): string {
+function placeholder(part: Record<string, unknown>, redact: (text: string) => string): string {
   const resource = part.resource as { uri?: unknown } | undefined;
   const detail = [part.mimeType, part.uri, resource?.uri].find(value => typeof value === "string");
-  return truncateChars(`[${String(part.type ?? "unknown")} content omitted${detail ? `: ${String(detail)}` : ""}]`, 200);
+  return truncateChars(redact(`[${String(part.type ?? "unknown")} content omitted${detail ? `: ${String(detail)}` : ""}]`), 200);
 }
 
 export const mcpCallTool: ToolDefinition = {
@@ -180,6 +187,8 @@ export const mcpCallTool: ToolDefinition = {
         catalog.learnOAuthOnly(tool);
         throw refusal(name, "oauth_only", region);
       }
+      // An initialize 403/404 on a session re-handshake makes the whole region unavailable (review R-5).
+      if (error instanceof McpError && error.kind === "unavailable") throw failure(catalog.markUnavailable(region, error));
       // A JSON-RPC error from the tool is relayed as a remote tool error (Integration Points).
       if (!(error instanceof McpError && error.kind === "rpc")) throw failure(error);
       remote = { content: [{ type: "text", text: error.message }], isError: true };
@@ -187,7 +196,7 @@ export const mcpCallTool: ToolDefinition = {
     const joined = remote.content
       .map(part => {
         const entry = (part ?? {}) as Record<string, unknown>;
-        return entry.type === "text" && typeof entry.text === "string" ? entry.text : placeholder(entry);
+        return entry.type === "text" && typeof entry.text === "string" ? entry.text : placeholder(entry, redact);
       })
       .join("\n");
     if (remote.isError && /requires OAuth/i.test(joined)) {

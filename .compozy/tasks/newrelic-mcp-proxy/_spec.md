@@ -368,8 +368,8 @@ S2 and S3 can run in parallel after S1.
   global scope, and a plain install is global.** Investigated in the CompozyOS v0.7.0 source (tag
   `v0.7.0`, paths under `internal/`):
   1. The v0.1 failure comes from the install default, not from validation. With no `--scope` and no
-     `--workspace`, the CLI sends an empty scope and workspace (`cli/extension.go`
-     `resolveExtensionCLIScope`, which resolves a workspace only for `--scope workspace` or
+     `--workspace`, the CLI sends an empty scope and workspace (`resolveExtensionCLIScope`, defined in
+     `cli/extension_scope.go:12` and called from `cli/extension.go`, which resolves a workspace only for `--scope workspace` or
      `--workspace`). For an operator actor (CLI ingress is a trusted human operator,
      `task/actors.go:29-50`), `applyManifestInstallScope` (`daemon/extensions_scope.go:130-153`) reads
      the manifest servers' `default_scope` and only when it is `workspace` re-resolves the target as
@@ -448,3 +448,32 @@ S2 and S3 can run in parallel after S1.
   The `mcp_request_failed` text no longer repeats the code inside the message, because the prefix
   now carries it. Check-in source errors keep `data.code = source_*` (v0.1 contract), so `poll.ts`
   and `errors.ts` are unchanged. The README error tables show what agents see.
+- **D-19 (2026-11-15, repair R2 / final review R-1..R-6, recorded before coding): shared probe
+  state, redirect refusal, and streaming SSE.**
+  1. **The doctor shares the catalog** (Core Feature 4, review R-5). The doctor command and the
+     startup probe now probe through the process MCP catalog (`McpCatalog.probe(region)`: `initialize`
+     and `tools/list`, forced, de-duplicated with any refresh in flight). Their result is the
+     proxy's region state: after a doctor or startup `unavailable`, the next proxy call answers
+     `mcp_unavailable` without a request. A doctor `available` loads the catalog. The doctor and
+     startup lines are unchanged. The probe writes no `mcp=` state-change line, because it prints its
+     own report or startup line, so IT-013's single startup line holds. The proxy's own state changes
+     still log as in D-13.3. A doctor run without a process catalog (tests) uses a private one.
+  2. **Re-handshake refusal** (review R-5). An initialize 403/404 during a session re-handshake in
+     `tools/call` marks the region `unavailable` (`McpCatalog.markUnavailable`). It is logged,
+     exposure is cleared, and the region is re-probed after one TTL. The call and later calls get
+     the standard `mcp_unavailable` text with the `_dx.md` hint, instead of `HTTP 403`.
+  3. **Hard grace limit** (review R-2). Business Rule 3's "at most another 10 minutes" is enforced
+     even when the one-per-minute retry is not due. A stale catalog whose refresh failed is
+     `unavailable` from two TTLs after its last success, and nothing is forwarded.
+  4. **Redirects are refused** (review R-4). The MCP client and the NerdGraph client (so the doctor
+     too) fetch with `redirect: "manual"`. A 3xx is never followed and the key is never resent. It
+     fails as `mcp_request_failed: HTTP 3xx` for the MCP, and as `New Relic request failed: 3xx`
+     (`extension_failed`) for NerdGraph.
+  5. **Streaming SSE** (review R-6). An SSE answer is read incrementally. The client stops at the
+     first complete event that carries the JSON-RPC answer to its request id, then cancels the body
+     reader, so a server that keeps the stream open still answers. Plain JSON and the request
+     timeouts are unchanged.
+  6. **Redaction order** (review R-1, R-3). Remote catalog text (tool and property names,
+     descriptions, schema types), content placeholders and the learned OAuth-only stderr line are
+     redacted before they are normalized, sanitized or shortened. The catalog takes the key redactor
+     as an injected option, so it still reads no environment.

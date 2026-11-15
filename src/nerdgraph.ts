@@ -81,6 +81,7 @@ export function createNerdGraphClient(
         headers: { "API-Key": apiKey, Accept: "application/json", "Content-Type": "application/json" },
         body: JSON.stringify({ query: gql, variables }),
         signal: AbortSignal.any([signal, timeout]),
+        redirect: "manual", // never resend the key to a redirect target (D-19); a 3xx fails as non-ok
       });
       text = await response.text();
     } catch {

@@ -32,6 +32,16 @@ export interface McpCatalog {
   learnOAuthOnly(name: string): void;
   /** The region's session-reusing client (the proxy forwards calls through it). */
   client(region: Region): McpClient;
+  /**
+   * Records an availability failure seen outside a refresh (an initialize 403/404 on a session
+   * re-handshake): the region becomes unavailable, re-probed after one TTL. Returns the error to show.
+   */
+  markUnavailable(region: Region, failure: McpError): McpError;
+  /**
+   * Doctor and startup probe (Core Feature 4): lists the tools now and feeds the shared region state,
+   * without a state-change stderr line (the probe prints its own). Returns this attempt's failure.
+   */
+  probe(region: Region): Promise<McpError | undefined>;
 }
 
 export interface McpCatalogOptions {
@@ -39,6 +49,8 @@ export interface McpCatalogOptions {
   now?: () => number;
   stderr?: { write(line: string): unknown };
   oauthOnly?: Set<string>;
+  /** Redacts the bound key from remote text before it is logged (Business Rule 7). */
+  redact?: (text: string) => string;
 }
 
 /** Business Rule 1: annotations only; a missing annotation means not read-only. */
@@ -74,6 +86,8 @@ interface Entry {
   tools: McpToolDef[];
   fetchedAt: number;
   checkedAt: number | undefined;
+  /** Failure of the last attempt; undefined after a success. */
+  lastFailure: McpError | undefined;
   refreshing: Promise<McpError | undefined> | undefined;
 }
 
@@ -81,44 +95,52 @@ export function createMcpCatalog(options: McpCatalogOptions): McpCatalog {
   const now = options.now ?? Date.now;
   const stderr = options.stderr ?? process.stderr;
   const oauthOnly = options.oauthOnly ?? PROCESS_OAUTH_ONLY;
+  const redact = options.redact ?? ((text: string) => text);
   const entries = new Map<Region, Entry>();
 
   const entry = (region: Region): Entry => {
     let found = entries.get(region);
     if (!found) {
-      found = { client: options.client(region), state: "unknown", reason: "not probed", tools: [], fetchedAt: 0, checkedAt: undefined, refreshing: undefined };
+      found = { client: options.client(region), state: "unknown", reason: "not probed", tools: [], fetchedAt: 0, checkedAt: undefined, lastFailure: undefined, refreshing: undefined };
       entries.set(region, found);
     }
     return found;
   };
 
-  function setState(region: Region, current: Entry, state: RegionState, reason: string, status?: number): void {
+  function setState(region: Region, current: Entry, state: RegionState, reason: string, status?: number, quiet = false): void {
     const changed = current.state !== state;
     current.state = state;
     current.reason = reason;
-    if (!changed) return;
+    if (state !== "available") current.tools = [];
+    if (!changed || quiet) return;
     const label = state === "unavailable" ? `unavailable(${status ?? "error"})` : state;
     stderr.write(`newrelic: region=${region} mcp=${label}\n`);
   }
 
+  const reasonOf = (failure: McpError) => (failure.status !== undefined ? String(failure.status) : failure.message);
+  const unavailableError = (current: Entry) =>
+    new McpError("unavailable", `New Relic MCP unavailable for this API key (${current.reason}); ${UNAVAILABLE_HINT}`);
+  const expired = (current: Entry, at: number) => at - current.fetchedAt >= 2 * CATALOG_TTL_MS;
+
   /** Lists the tools; returns the error a caller should see when the region is left non-available. */
-  async function refresh(region: Region, current: Entry): Promise<McpError | undefined> {
+  async function refresh(region: Region, current: Entry, quiet = false): Promise<McpError | undefined> {
     const started = now();
     current.checkedAt = started;
     try {
-      current.tools = await current.client.listTools(new AbortController().signal);
+      const tools = await current.client.listTools(new AbortController().signal);
+      current.tools = tools;
       current.fetchedAt = started;
-      setState(region, current, "available", "");
+      current.lastFailure = undefined;
+      setState(region, current, "available", "", undefined, quiet);
       return undefined;
     } catch (error) {
       const failure = error instanceof McpError ? error : new McpError("request_failed", "unexpected error");
+      current.lastFailure = failure;
       // Business Rule 3: a failed refresh keeps the previous catalog for at most one more TTL.
-      if (current.state === "available" && started - current.fetchedAt < 2 * CATALOG_TTL_MS) return undefined;
+      if (current.state === "available" && !expired(current, started)) return undefined;
       const noMcp = failure.kind === "unavailable" || failure.kind === "forbidden";
-      const reason = failure.status !== undefined ? String(failure.status) : failure.message;
-      current.tools = [];
-      if (noMcp || current.state === "available") setState(region, current, "unavailable", reason, failure.status);
-      else setState(region, current, "unknown", reason);
+      if (noMcp || current.state === "available") setState(region, current, "unavailable", reasonOf(failure), failure.status, quiet);
+      else setState(region, current, "unknown", reasonOf(failure), undefined, quiet);
       return noMcp ? undefined : failure;
     }
   }
@@ -134,12 +156,17 @@ export function createMcpCatalog(options: McpCatalogOptions): McpCatalog {
         ? since(current.fetchedAt) >= CATALOG_TTL_MS && since(current.checkedAt) >= RETRY_MS
         : since(current.checkedAt) >= (current.state === "unavailable" ? CATALOG_TTL_MS : RETRY_MS));
     let failure: McpError | undefined;
+    // Business Rule 3 hard limit, independent of the retry throttle (review R-2): when the retry is not
+    // due yet, a stale catalog whose refresh already failed is not used two TTLs after the last success.
+    if (!due && !current.refreshing && current.state === "available" && current.lastFailure && expired(current, at)) {
+      setState(region, current, "unavailable", reasonOf(current.lastFailure), current.lastFailure.status);
+    }
     if (current.refreshing || due) {
       current.refreshing ??= refresh(region, current).finally(() => (current.refreshing = undefined));
       failure = await current.refreshing;
     }
     if (current.state === "available") return current;
-    throw failure ?? new McpError("unavailable", `New Relic MCP unavailable for this API key (${current.reason}); ${UNAVAILABLE_HINT}`);
+    throw failure ?? unavailableError(current);
   }
 
   return {
@@ -162,8 +189,22 @@ export function createMcpCatalog(options: McpCatalogOptions): McpCatalog {
     learnOAuthOnly(name) {
       if (oauthOnly.has(name)) return;
       oauthOnly.add(name);
-      stderr.write(`newrelic: mcp tool ${name.replace(/[^\w.-]/g, "?").slice(0, 100)} requires OAuth; hidden\n`);
+      // Redact before sanitizing or shortening (review R-1).
+      stderr.write(`newrelic: mcp tool ${redact(name).replace(/[^\w.-]/g, "?").slice(0, 100)} requires OAuth; hidden\n`);
     },
     client: region => entry(region).client,
+    markUnavailable(region, failure) {
+      const current = entry(region);
+      current.checkedAt = now(); // re-probed after one TTL, like a failed probe
+      current.lastFailure = failure;
+      setState(region, current, "unavailable", reasonOf(failure), failure.status);
+      return unavailableError(current);
+    },
+    async probe(region) {
+      const current = entry(region);
+      current.refreshing ??= refresh(region, current, true).finally(() => (current.refreshing = undefined));
+      await current.refreshing;
+      return current.lastFailure;
+    },
   };
 }

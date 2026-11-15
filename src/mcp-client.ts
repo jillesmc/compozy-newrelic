@@ -96,8 +96,10 @@ export function createMcpClient(region: Region, apiKey: string, options: McpClie
         headers,
         body: JSON.stringify({ jsonrpc: "2.0", ...message }),
         signal: AbortSignal.any([signal, timeout]),
+        // Never resend the key to a redirect target; a 3xx becomes `HTTP 3xx` (review R-4, D-19).
+        redirect: "manual",
       });
-      const text = await response.text();
+      const text = await readBody(response, typeof message.id === "number" ? message.id : undefined);
       return { status: response.status, text, sessionId: response.headers?.get("mcp-session-id") ?? undefined };
     } catch {
       if (signal.aborted) throw signal.reason;
@@ -177,6 +179,29 @@ export function createMcpClient(region: Region, apiKey: string, options: McpClie
       };
     },
   };
+}
+
+/**
+ * The body text; an SSE stream is read incrementally and cancelled at the first complete event that
+ * carries the answer to `id`, so a server that keeps the stream open still answers (review R-6).
+ */
+async function readBody(response: Response, id: number | undefined): Promise<string> {
+  const sse = /text\/event-stream/i.test(response.headers?.get("content-type") ?? "");
+  if (!sse || id === undefined || !response.body) return await response.text();
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      buffer = (buffer + decoder.decode(value, { stream: !done })).replace(/\r\n/g, "\n");
+      const end = buffer.lastIndexOf("\n\n");
+      const complete = done ? buffer : buffer.slice(0, Math.max(end, 0));
+      if (done || (complete && parseRpc(complete, id))) return complete;
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
 }
 
 function isToolDef(value: unknown): value is McpToolDef {

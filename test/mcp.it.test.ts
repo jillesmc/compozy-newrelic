@@ -90,6 +90,23 @@ describe("MCP proxy against the fake Streamable HTTP MCP", () => {
     assert.equal(methods().filter(method => method === "initialize").length, 3);
   });
 
+  test("IT-104 session: an initialize 403 on a re-handshake makes the region unavailable; nothing more is sent (R-5)", async () => {
+    await h.call("mcp_tools");
+    h.nr.mcpFake.expireCalls = 1;
+    h.nr.mcpFake.initStatus = 403;
+    const message = "New Relic MCP unavailable for this API key (403); use the ext__newrelic__* NerdGraph tools";
+    assert.deepEqual(await toolFailure(h.call("mcp_call", { tool: "list_recent_issues" })), { code: "mcp_unavailable", message });
+    assert.equal(h.mcp.state(h.nr.region), "unavailable");
+    assert.ok(h.lines.includes(`newrelic: region=${h.nr.region} mcp=unavailable(403)\n`));
+    const sent = h.nr.mcpFake.requests.length;
+    assert.deepEqual(await toolFailure(h.call("mcp_tools")), { code: "mcp_unavailable", message });
+    assert.deepEqual(await toolFailure(h.call("mcp_call", { tool: "list_recent_issues" })), { code: "mcp_unavailable", message });
+    assert.equal(h.nr.mcpFake.requests.length, sent);
+    h.nr.mcpFake.initStatus = 0;
+    h.advance(CATALOG_TTL_MS); // re-probed after one TTL
+    assert.equal(out(await h.call("mcp_call", { tool: "list_recent_issues" })).is_error, false);
+  });
+
   test("IT-105 learn: a tool answering 403 requires OAuth is learned and never listed or forwarded again", async () => {
     assert.ok(out(await h.call("mcp_tools")).exposed.some((row: { name: string }) => row.name === "oauth_gated_report"));
     assert.deepEqual(await toolFailure(h.call("mcp_call", { tool: "oauth_gated_report" })), {
@@ -131,7 +148,7 @@ describe("MCP proxy against the fake Streamable HTTP MCP", () => {
     assert.equal((await toolFailure(h.call("mcp_call", { tool: "list_dashboards" }))).reason, "unknown_tool");
   });
 
-  test("IT-107 unavailable: initialize 404 or 403 → the doctor prints unavailable and both tools return mcp_unavailable", async () => {
+  test("IT-107 unavailable: initialize 404 or 403 → the doctor prints unavailable and both tools return mcp_unavailable with no further request", async () => {
     for (const status of [404, 403]) {
       await h.nr.close();
       h = await startProxyHarness();
@@ -142,8 +159,10 @@ describe("MCP proxy against the fake Streamable HTTP MCP", () => {
         new RegExp(`^MCP: unavailable \\(${status} from http://127\\.0\\.0\\.1:${h.nr.port}/mcp/\\) — agents keep the ext__newrelic__\\* tools`, "m")
       );
       const message = `New Relic MCP unavailable for this API key (${status}); use the ext__newrelic__* NerdGraph tools`;
-      assert.deepEqual(await toolFailure(h.call("mcp_tools")), { code: "mcp_unavailable", message });
+      // R-5: the doctor's probe is the proxy's region state; the next proxy calls send no request.
+      assert.equal(h.mcp.state(h.nr.region), "unavailable");
       const probes = h.fetches();
+      assert.deepEqual(await toolFailure(h.call("mcp_tools")), { code: "mcp_unavailable", message });
       assert.deepEqual(await toolFailure(h.call("mcp_call", { tool: "list_recent_issues" })), { code: "mcp_unavailable", message });
       assert.equal(h.fetches(), probes);
     }

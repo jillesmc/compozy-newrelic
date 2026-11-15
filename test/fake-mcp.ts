@@ -37,6 +37,8 @@ export interface FakeMcp {
   status?: number;
   /** The next `expireCalls` tools/call requests find their session expired (404). */
   expireCalls: number;
+  /** SSE answers stay open after the event (a server that never ends the stream). */
+  holdOpen?: boolean;
   sessions: Set<string>;
   requests: FakeMcpRequest[];
 }
@@ -88,6 +90,7 @@ export async function answerMcp(mcp: FakeMcp, headers: IncomingHttpHeaders, raw:
     const text = JSON.stringify(body);
     if (mcp.mode === "sse" && status === 200) {
       res.writeHead(200, { "Content-Type": "text/event-stream", ...extra });
+      if (mcp.holdOpen) return void res.write(`event: message\ndata: ${text}\n\n`);
       return void res.end(`event: message\ndata: ${text}\n\n`);
     }
     res.writeHead(status, { "Content-Type": "application/json", ...extra });

@@ -518,7 +518,11 @@ Refusals send no request, and an OAuth-only tool is refused even before the cata
 `initialize` answers 403 or 404 the region is `unavailable` and is probed again after 10 minutes;
 until then both tools answer `mcp_unavailable` at once. After any other probe failure (401, 429,
 5xx, network) the call that probed gets the matching error above, and calls in the next minute get
-`mcp_unavailable` with the same reason. Each region state change writes one line
+`mcp_unavailable` with the same reason. A catalog whose refresh keeps failing is used for at most
+10 more minutes, then the region is `unavailable`. An `initialize` 403 or 404 when a call renews its
+session also makes the region `unavailable`. The doctor and the startup probe share this state: if
+the doctor reports `unavailable`, the next proxy call answers at once without a request. Each region
+state change seen by the proxy writes one line
 (`newrelic: region=us mcp=available|unavailable(<status>)|unknown`) to
 `compozy extension logs newrelic`. Arguments and results are never logged.
 
@@ -624,7 +628,10 @@ manual server and the extension keep separate secrets, so they can coexist while
 
 - The API key lives in the CompozyOS secret store and travels only in the NerdGraph request header
   and in the `api-key` header to the region's official MCP host (proxy and doctor). It never appears
-  in items, tool results, error messages, logs or source state; key text that New Relic echoes back is redacted before anything is shortened.
+  in items, tool results, error messages, logs or source state; key text that New Relic echoes back
+  (results, tool names, descriptions, schemas) is redacted before anything is shortened.
+- Redirects are never followed: a 3xx from NerdGraph or the MCP host fails the request, so the key
+  is never resent to another host.
 - The extension is read-only: it sends no NerdGraph mutations, and the proxy calls only remote tools
   New Relic marks read-only and not destructive. The check-in sources never touch the MCP.
 - No Host API permissions are requested.
@@ -665,6 +672,7 @@ node test/fake-nerdgraph.ts --port 8788 --sse
 curl http://127.0.0.1:8788/_fake/mcp                                   # mode, statuses, tool names
 curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"initStatus":403}'    # MCP unavailable for the key
 curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"expireCalls":1}'     # next call finds its session expired
+curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"holdOpen":true}'     # SSE answers keep the stream open
 curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"reset":true}'        # default catalog and settings
 ```
 

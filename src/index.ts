@@ -54,7 +54,8 @@ export function createExtension(options: ExtensionOptions = {}, deps: NewRelicEx
     extension.tool(name, { description, inputSchema, readOnly: true, ...(command ? { command } : {}) }, toolHandler(tool, toolDeps));
   }
   // One probe line at start (US-010.AC-2); onReady never runs in __describe mode and never blocks startup.
-  extension.onReady(() => void startupProbe({ ...deps, env }));
+  // The probe shares the proxy catalog, so its MCP result is the proxy's region state (D-19).
+  extension.onReady(() => void startupProbe({ ...deps, env, mcp: toolDeps.mcp }));
   return extension;
 }
 

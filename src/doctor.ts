@@ -1,5 +1,6 @@
 import { SourceError } from "./errors.ts";
-import { classify, hiddenCounts, processOAuthOnly } from "./mcp-catalog.ts";
+import { redactor } from "./items.ts";
+import { createMcpCatalog, type McpCatalog } from "./mcp-catalog.ts";
 import { createMcpClient, McpError } from "./mcp-client.ts";
 import { createNerdGraphClient, regionEndpoints, resolveApiKey, type Region } from "./nerdgraph.ts";
 
@@ -10,6 +11,8 @@ export interface DoctorDeps {
   fetch?: typeof fetch;
   requestTimeoutMs?: number;
   mcpTimeoutMs?: number;
+  /** The process MCP catalog; the probe result feeds its region state (Core Feature 4, D-19). */
+  mcp?: McpCatalog;
 }
 
 export type NerdGraphStatus = { ok: true; accounts: number } | { ok: false; code: string; message: string };
@@ -58,22 +61,27 @@ function failure(error: unknown): NerdGraphStatus {
 }
 
 /**
- * Probes the MCP through the proxy client: `initialize` then `tools/list`; the counts use the same
- * exposure filter as `ext__newrelic__mcp_tools`. Never calls an MCP tool.
+ * Probes the MCP through the shared catalog (`initialize`, then `tools/list`), so the result is the
+ * proxy's region state too: a doctor `unavailable` makes the next proxy call answer without a request.
+ * Without a process catalog (tests, one-off use) a private one is used. Never calls an MCP tool.
  */
 export async function probeMcp(region: Region, apiKey: string, deps: DoctorDeps = {}): Promise<McpStatus> {
-  const client = createMcpClient(region, apiKey, { fetch: deps.fetch, timeoutMs: deps.mcpTimeoutMs });
+  const catalog =
+    deps.mcp ??
+    createMcpCatalog({
+      client: target => createMcpClient(target, apiKey, { fetch: deps.fetch, timeoutMs: deps.mcpTimeoutMs }),
+      stderr: { write: () => true },
+      redact: redactor(apiKey),
+    });
   try {
-    const tools = await client.listTools(new AbortController().signal);
-    const oauthOnly = processOAuthOnly();
-    const exposed = tools.filter(tool => classify(tool, oauthOnly).exposed).length;
-    return { status: "available", exposed, oauthOnly: hiddenCounts(tools, oauthOnly).oauth_only };
-  } catch (error) {
-    if (!(error instanceof McpError)) return { status: "unknown", error: "unexpected error" };
+    const error = await catalog.probe(region);
+    if (!error) return { status: "available", exposed: (await catalog.tools(region)).length, oauthOnly: catalog.hidden(region).oauth_only };
     if (error.kind === "unavailable" || error.kind === "forbidden" || error.kind === "credential_expired") {
       return { status: "unavailable", http: error.status ?? 0 };
     }
     return { status: "unknown", error: error.kind === "rate_limited" ? "HTTP 429" : error.message.slice(0, 200) };
+  } catch (error) {
+    return { status: "unknown", error: error instanceof McpError ? error.message.slice(0, 200) : "unexpected error" };
   }
 }
 

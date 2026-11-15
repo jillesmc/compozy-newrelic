@@ -27,6 +27,7 @@
  *   curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"initStatus":403}'    # MCP unavailable for the key
  *   curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"initStatus":0,"status":0,"expireCalls":1}'
  *   curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"tools":[{"name":"x","annotations":{"readOnlyHint":true}}]}'
+ *   curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"holdOpen":true}'     # SSE streams stay open
  *   curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"reset":true}'        # default catalog and settings
  */
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";

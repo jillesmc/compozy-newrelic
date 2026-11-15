@@ -1,0 +1,24 @@
+{
+  "name": "newrelic",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && bun build src/index.ts --target=node --outfile=dist/index.js",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "test:node": "node --test \"test/**/*.test.ts\"",
+    "fake-nerdgraph": "node test/fake-nerdgraph.ts"
+  },
+  "dependencies": {
+    "@compozy/extension-sdk": "0.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

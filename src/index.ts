@@ -1,0 +1,53 @@
+import { pathToFileURL } from "node:url";
+
+import { Extension, type ExtensionOptions } from "@compozy/extension-sdk";
+
+import { createPollHandler, type PollDeps } from "./poll.ts";
+import { SOURCES } from "./sources/index.ts";
+
+export const EXTENSION_VERSION = "0.1.0";
+/**
+ * Supported CompozyOS floor. The TS SDK 0.7.0 describe payload still carries its stale built-in floor
+ * "0.3.0-beta.1" and `compozy extension build` stamps extension.toml from it, so it is set here.
+ */
+export const MIN_COMPOZY_VERSION = "0.7.0";
+export const REQUIRED_ENV = ["NEW_RELIC_API_KEY"];
+
+class NewRelicExtension extends Extension {
+  public override describe(): ReturnType<Extension["describe"]> {
+    const payload = super.describe();
+    return { ...payload, sdk: { ...payload.sdk, min_compozy_version: MIN_COMPOZY_VERSION } };
+  }
+}
+
+export type NewRelicExtensionDeps = PollDeps;
+
+/** The only module that builds the SDK Extension and reads process.env (through PollDeps defaults). */
+export function createExtension(options: ExtensionOptions = {}, deps: NewRelicExtensionDeps = {}): Extension {
+  const extension = new NewRelicExtension(
+    {
+      name: "newrelic",
+      version: EXTENSION_VERSION,
+      description: "New Relic check-in sources and investigation tools",
+      subprocess: { command: "node", args: ["index.js"] },
+      capabilities: { provides: [] },
+      permissions: { requires: [] },
+      requires_env: [...REQUIRED_ENV],
+    },
+    options
+  );
+  const env = deps.env ?? process.env;
+  for (const source of SOURCES) {
+    extension.heartbeatSource(
+      source.kind,
+      { title: source.title, description: source.description, params_schema: source.params_schema },
+      createPollHandler(source, { ...deps, env })
+    );
+  }
+  return extension;
+}
+
+const entryPoint = process.argv[1];
+if (entryPoint && import.meta.url === pathToFileURL(entryPoint).href) {
+  void createExtension().start();
+}

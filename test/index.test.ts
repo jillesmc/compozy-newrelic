@@ -5,15 +5,20 @@ import { createExtension } from "../src/index.ts";
 import { normalizeMessage, sanitizeKey } from "../src/normalize.ts";
 
 describe("entry point and normalize", () => {
-  test("index: describe() carries min_compozy_version 0.7.0, NEW_RELIC_API_KEY and the nrql kind", () => {
+  test("index: describe() carries min_compozy_version 0.7.0, NEW_RELIC_API_KEY and the four kinds", () => {
     const payload = createExtension().describe();
     assert.equal(payload.sdk.min_compozy_version, "0.7.0");
     assert.deepEqual([...(payload.requires_env ?? [])].sort(), ["NEW_RELIC_API_KEY"]);
     assert.deepEqual(payload.provides, ["heartbeat.source"]);
     assert.deepEqual([payload.subprocess?.command, payload.subprocess?.args], ["node", ["index.js"]]);
     const kinds = payload.heartbeat_source_kinds ?? [];
-    assert.deepEqual(kinds.map(kind => [kind.kind, kind.title]), [["nrql", "NRQL threshold"]]);
-    const schema = kinds[0]?.params_schema as { required: string[]; additionalProperties: boolean };
+    assert.deepEqual(kinds.map(kind => [kind.kind, kind.title]), [
+      ["errors", "New errors"],
+      ["issues", "New Relic alert issues"],
+      ["logs", "Log spikes"],
+      ["nrql", "NRQL threshold"],
+    ]);
+    const schema = kinds.find(kind => kind.kind === "nrql")?.params_schema as { required: string[]; additionalProperties: boolean };
     assert.deepEqual(schema.required, ["account_id", "nrql", "threshold"]);
     assert.equal(schema.additionalProperties, false);
   });

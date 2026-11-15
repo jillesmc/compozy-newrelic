@@ -1,6 +1,6 @@
 import type { HeartbeatSourceRequest, HeartbeatSourceResult, JSONValue } from "@compozy/extension-sdk";
 
-import { canonicalJson, fingerprint, transition, type Signal } from "../engine.ts";
+import { fingerprint, sortRows, transition, type Signal } from "../engine.ts";
 import { paramsError } from "../errors.ts";
 import { formatNumber, isoUtc, redactDeep, shapeItem, truncateChars } from "../items.ts";
 import { sanitizeKey } from "../normalize.ts";
@@ -61,9 +61,7 @@ export interface NrqlRowValue {
 
 /** First numeric non-facet field of a row; `{"percentile.duration": {"95": 2.31}}` reads as p95. */
 export function readRow(row: Record<string, unknown>): NrqlRowValue {
-  const rawFacet = row.facet;
-  const facet =
-    rawFacet === undefined ? null : (Array.isArray(rawFacet) ? rawFacet : [rawFacet]).map(part => String(part));
+  const facet = facetOf(row);
   // ponytail: a numeric FACET attribute listed before the aggregate would be read as the value;
   // parse the FACET clause if real queries hit it.
   for (const [field, entry] of Object.entries(row)) {
@@ -75,6 +73,18 @@ export function readRow(row: Record<string, unknown>): NrqlRowValue {
     }
   }
   throw paramsError(SHAPE_MESSAGE);
+}
+
+/** A row's facet tuple (`facet` holds one value or an array), or null without FACET. */
+export function facetOf(row: Record<string, unknown>): string[] | null {
+  const raw = row.facet;
+  return raw === undefined ? null : (Array.isArray(raw) ? raw : [raw]).map(part => String(part));
+}
+
+/** The `count(*)` value of a counting row (errors, logs); its FACET attributes are never read as the count. */
+export function countOf(row: Record<string, unknown>): number {
+  if (typeof row.count !== "number") throw paramsError(SHAPE_MESSAGE);
+  return row.count;
 }
 
 function nestedLabel(field: string, inner: string): string {
@@ -94,11 +104,8 @@ export function nrqlSignals(
   context: Pick<SourceContext, "endpoints" | "redact">
 ): Signal[] {
   if (rows.length > MAX_NRQL_ROWS) throw paramsError(ROWS_MESSAGE);
-  const sorted = redactDeep(rows, context.redact)
-    .map(row => ({ row, text: canonicalJson(row) }))
-    .sort((a, b) => (a.text < b.text ? -1 : a.text > b.text ? 1 : 0));
   const byKey = new Map<string, Signal>();
-  for (const { row } of sorted) {
+  for (const row of sortRows(redactDeep(rows, context.redact))) {
     const read = readRow(row);
     if (read.value === null) continue;
     const margin = params.condition === "above" ? read.value - params.threshold : params.threshold - read.value;

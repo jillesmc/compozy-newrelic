@@ -66,3 +66,38 @@ export function requiredNumber(raw: unknown, name: string): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) throw paramsError(`set with.${name} to a number`);
   return raw;
 }
+
+/** Integer ≥ `min`; `fallback` applies when the param is absent (required when it is undefined). */
+export function integerParam(raw: unknown, name: string, min: number, fallback?: number): number {
+  const value = raw ?? fallback;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min) {
+    throw paramsError(`set with.${name} to an integer of at least ${min}`);
+  }
+  return value;
+}
+
+/**
+ * Non-empty list of strings, each in `allowed` (when given) or matching `pattern`; returned sorted and
+ * de-duplicated so equivalent spellings share a fingerprint. Absent → `fallback`.
+ */
+export function stringListParam(
+  raw: unknown,
+  name: string,
+  check: { allowed?: readonly string[]; pattern?: RegExp; fallback: string[]; minItems?: number; maxItems?: number }
+): string[] {
+  const value = raw ?? check.fallback;
+  const valid =
+    Array.isArray(value) &&
+    value.length >= (check.minItems ?? 0) &&
+    value.length <= (check.maxItems ?? 100) &&
+    value.every(
+      entry =>
+        typeof entry === "string" &&
+        (check.allowed ? check.allowed.includes(entry) : (check.pattern?.test(entry) ?? entry !== ""))
+    );
+  if (!valid) {
+    const hint = check.allowed ? `any of ${check.allowed.join(", ")}` : "valid strings";
+    throw paramsError(`with.${name} must be a list of ${hint}`);
+  }
+  return [...new Set(value as string[])].sort();
+}

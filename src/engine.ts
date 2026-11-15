@@ -32,6 +32,14 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/** Rows in canonical-JSON order, so NerdGraph row order never affects output (Business Rule 12). */
+export function sortRows<T>(rows: T[]): T[] {
+  return rows
+    .map(row => ({ row, text: canonicalJson(row) }))
+    .sort((a, b) => (a.text < b.text ? -1 : a.text > b.text ? 1 : 0))
+    .map(({ row }) => row);
+}
+
 /** Business Rule 5: 16 hex of SHA-256 over the canonical JSON of the defining parameters. */
 export function fingerprint(definingParams: Record<string, unknown>): string {
   return sha256Hex(canonicalJson(definingParams)).slice(0, 16);

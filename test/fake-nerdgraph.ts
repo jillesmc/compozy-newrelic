@@ -6,6 +6,7 @@
  * In-process (tests):
  *   const nr = await startFakeNerdGraph({ rows: [...] });   // nr.region === "loopback:<port>"
  *   nr.rows = [...]                                         // rows for every NRQL query
+ *   nr.issues = [...]; nr.issuePageSize = 2                 // aiIssues answers, paged by nextCursor
  *   nr.requests                                             // { path, headers, body } per request
  *   nr.respond = req => ({ status: 503 })                   // override one or all answers
  *   await nr.close();
@@ -14,6 +15,7 @@
  *   node test/fake-nerdgraph.ts --port 8788
  *   curl -X POST http://127.0.0.1:8788/_fake/rows -d '[{"facet":"checkout-api","p95":2.31}]'
  *   curl http://127.0.0.1:8788/_fake/rows
+ *   curl -X POST http://127.0.0.1:8788/_fake/issues -d '[{"issueId":"i-1","priority":"CRITICAL","state":"ACTIVATED"}]'
  *   # HEARTBEAT.md: with: { account_id: 1234567, region: "loopback:8788", ... }; any NRAK-... key works.
  *
  * Requests without an `API-Key: NRAK-...` header get 401.
@@ -39,6 +41,9 @@ export interface FakeNerdGraph {
   port: number;
   region: `loopback:${number}`;
   rows: Record<string, unknown>[];
+  /** aiIssues issues; a query whose text contains `aiIssues` gets a page of these. */
+  issues: Record<string, unknown>[];
+  issuePageSize: number;
   requests: FakeRequest[];
   respond?: (request: FakeRequest) => FakeResponse | undefined;
   close(): Promise<void>;
@@ -52,6 +57,8 @@ export async function startFakeNerdGraph(
     port: 0,
     region: "loopback:0",
     rows: [...(options.rows ?? [])],
+    issues: [],
+    issuePageSize: 50,
     requests: [],
     close: async () => {
       for (const release of holds) release();
@@ -72,6 +79,10 @@ export async function startFakeNerdGraph(
     if (path === "/_fake/rows") {
       if (req.method === "POST") fake.rows = JSON.parse(raw || "[]");
       return send(200, fake.rows);
+    }
+    if (path === "/_fake/issues") {
+      if (req.method === "POST") fake.issues = JSON.parse(raw || "[]");
+      return send(200, fake.issues);
     }
     let body: FakeRequest["body"];
     try {
@@ -99,12 +110,20 @@ export async function startFakeNerdGraph(
     if (req.method !== "POST" || !/^(\/eu)?\/graphql$/.test(path)) return send(404, { errors: [{ message: "not found" }] });
     if (!/^NRAK-\S+$/.test(String(req.headers["api-key"] ?? ""))) return send(401, { errors: [{ message: "unauthorized" }] });
     const id = body.variables?.id;
+    if (body.query?.includes("aiIssues")) return send(200, { data: { actor: { account: { id, aiIssues: { issues: issuePage(fake, body.query) } } } } });
     send(200, { data: { actor: { account: { id, nrql: { results: fake.rows } } } } });
   });
   await new Promise<void>(resolve => server.listen(options.port ?? 0, "127.0.0.1", resolve));
   fake.port = (server.address() as AddressInfo).port;
   fake.region = `loopback:${fake.port}`;
   return fake;
+}
+
+/** One aiIssues page: the cursor literal is the offset; `nextCursor` is null on the last page. */
+function issuePage(fake: FakeNerdGraph, query: string) {
+  const offset = Number(/cursor:"([0-9]+)"/.exec(query)?.[1] ?? 0);
+  const end = offset + fake.issuePageSize;
+  return { issues: fake.issues.slice(offset, end), nextCursor: end < fake.issues.length ? String(end) : null };
 }
 
 const entryPoint = process.argv[1];

@@ -118,7 +118,7 @@ export function createNerdGraphClient(
   };
 }
 
-function accountError(accountId: unknown): SourceError {
+export function accountError(accountId: unknown): SourceError {
   return sourceError("source_params_invalid", `this API key cannot read account ${String(accountId)}`);
 }
 

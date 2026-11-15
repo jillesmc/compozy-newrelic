@@ -647,5 +647,7 @@ No CompozyOS config keys added. The existing `[agents.heartbeat.sources]` `max_i
   with more than one numeric entry fails with the shape message (`source_params_invalid`,
   `nrql must return one number per row …`) instead of being misread. Fields whose name is an
   attribute of the query's `FACET` clause (parsed from the text after `FACET` up to `SINCE`, `UNTIL`,
-  `LIMIT`, `TIMESERIES`, `COMPARE`, `ORDER` or the end; `AS` aliases and backtick quoting handled)
-  are skipped, so an echoed numeric facet attribute is never read as the value.
+  `LIMIT`, `TIMESERIES`, `COMPARE`, `ORDER`, `WITH`, `EXTRAPOLATE`, `SLIDE` or the end; `AS` aliases
+  and backtick quoting handled) are skipped, so an echoed numeric facet attribute is never read as the
+  value. Known limitation (final review R-12, deferred nit): a `FACET` clause placed before `WHERE`,
+  or the word `FACET` inside a string literal, is not parsed correctly; write `FACET` after `WHERE`.

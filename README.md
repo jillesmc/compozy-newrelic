@@ -24,19 +24,21 @@ official MCP. The extension never writes to New Relic.
 
 ## Install
 
-Run this from your project directory (a CompozyOS workspace):
+Install it for all projects:
 
 ```bash
-compozy extension install github:jillesmc/compozy-newrelic@v0.1.0 --allow-unverified --yes
+compozy extension install github:jillesmc/compozy-newrelic@v0.1.0 --scope global --allow-unverified --yes
 ```
+
+`--scope global` is required for a global install: the packaged MCP servers default to workspace
+scope, and without an explicit scope the install fails with
+`invalid manifest field "workspace_id": workspace scope requires a workspace`. To install into a
+single project instead, use `--scope workspace --workspace <id|name|path>`.
 
 The consent flags are required: GitHub installs are not catalog-verified, so CompozyOS refuses them
 with `extension_checksum_unverified` unless you pass `--allow-unverified` (`--yes` skips the prompt).
 The release's `.sha256` sidecar is still checked for integrity, and `--expected-digest <sha256>` pins
 the exact archive you reviewed.
-
-The official MCP servers default to workspace scope, so the install needs a workspace. From
-outside a workspace directory, add `--workspace <id|name|path>` or choose `--scope global`.
 
 Upgrade later with the same consent:
 

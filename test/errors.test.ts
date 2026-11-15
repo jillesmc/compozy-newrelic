@@ -142,4 +142,10 @@ describe("newrelic/errors", () => {
       ["TimeoutError in checkout-api: 37 in 30m", "TimeoutError in cart: 12 in 30m", "NotFoundError in checkout-api: 11 in 30m"]
     );
   });
+
+  test("IT-003b errors: a row without a numeric count is an unexpected response, not a params error (review R-3)", async () => {
+    const error = await rejection(poll([{ facet: ["checkout-api", "TimeoutError", "boom"] }]));
+    assert.equal(error.data?.code, "source_extension_failed");
+    assert.equal(error.message, "New Relic request failed: unexpected response");
+  });
 });

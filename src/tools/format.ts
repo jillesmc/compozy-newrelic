@@ -41,36 +41,69 @@ export function renderTable(rows: Row[], columns: string[]): string {
   return [columns.join(" | "), ...rows.map(row => columns.map(column => value(row[column])).join(" | "))].join("\n");
 }
 
+/** Cell clip levels tried, loosest first, before a row is dropped (review R-2). */
+const CLIP_LEVELS = [Infinity, 100, 40, 10];
+
 /**
- * Builds a bounded ToolResult (rows arrive redacted, see tool.ts): rows are capped at `cap`, then trailing rows are dropped
- * until both the text and the structured JSON fit 8 KiB; `truncated` reports any cut.
+ * Builds a bounded ToolResult (rows arrive redacted, see tool.ts) whose text and structured JSON both
+ * fit 8 KiB. Rows are capped at `cap`. With `columns` (tables), only the leading columns that fit with
+ * one hardest-clipped row are kept. Then the most rows are kept, clipping cells harder before dropping
+ * the last row, so one wide row still returns clipped data. `truncated` reports any cut.
  */
 export function boundedResult(input: {
   rows: Row[];
   cap: number;
-  render: (rows: Row[]) => string;
+  render: (rows: Row[], columns: string[]) => string;
+  /** Table columns, in order; omitted for line renderers. */
+  columns?: string[];
   /** The source had more rows than were fetched. */
   more?: boolean;
 }): ToolResult {
-  let rows = input.rows;
-  let truncated = !!input.more || rows.length > input.cap;
-  rows = rows.slice(0, input.cap);
-  const build = () => {
+  const all = input.rows.slice(0, input.cap);
+  const allColumns = input.columns ?? [];
+  const build = (count: number, clip: number, width: number) => {
+    const columns = allColumns.slice(0, width);
+    const rows = all.slice(0, count).map(row => {
+      const kept = input.columns ? Object.fromEntries(columns.map(column => [column, row[column] ?? null])) : row;
+      return clip === Infinity ? kept : clipRow(kept, clip);
+    });
+    const truncated =
+      !!input.more || input.rows.length > input.cap || count < all.length || width < allColumns.length || clip !== Infinity;
     const structured: JSONValue = { rows, truncated };
-    const text = `${input.render(rows) || "(no rows)"}${truncated ? "\n(truncated)" : ""}`;
-    return { structured, text };
+    const text = `${input.render(rows, columns) || "(no rows)"}${truncated ? "\n(truncated)" : ""}`;
+    return { structured, text, truncated };
   };
-  let out = build();
-  while (rows.length > 0 && (byteLength(out.text) > MAX_TOOL_BYTES || byteLength(JSON.stringify(out.structured)) > MAX_TOOL_BYTES)) {
-    rows = rows.slice(0, -1);
-    truncated = true;
-    out = build();
+  const fits = (out: ReturnType<typeof build>) =>
+    byteLength(out.text) <= MAX_TOOL_BYTES && byteLength(JSON.stringify(out.structured)) <= MAX_TOOL_BYTES;
+  const hardest = CLIP_LEVELS[CLIP_LEVELS.length - 1]!;
+  // Widest column prefix that fits with one hardest-clipped row (fit shrinks monotonically with width).
+  let low = 0;
+  let high = allColumns.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (fits(build(Math.min(1, all.length), hardest, mid))) low = mid;
+    else high = mid - 1;
   }
+  let out = build(0, Infinity, low);
+  search: for (let count = all.length; count >= 1; count--) {
+    for (const clip of CLIP_LEVELS) {
+      const candidate = build(count, clip, low);
+      if (fits(candidate)) {
+        out = candidate;
+        break search;
+      }
+    }
+  }
+  if (!fits(out)) out = { structured: { rows: [], truncated: true }, text: "(no rows)\n(truncated)", truncated: true };
   return {
     content: [{ type: "text", text: out.text }],
     structured: out.structured,
-    truncated,
+    truncated: out.truncated,
     bytes: byteLength(out.text),
     duration_ms: 0,
   };
+}
+
+function clipRow(row: Row, max: number): Row {
+  return Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === "string" ? truncateChars(value, max) : value]));
 }

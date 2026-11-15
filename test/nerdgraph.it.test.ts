@@ -131,4 +131,16 @@ describe("nerdgraph client + nrql source against the fake NerdGraph", () => {
     nr.respond = () => ({ status: 200, body: { data: { actor: { account: null } } } });
     assert.equal((await rejection(poll(null))).message, `this API key cannot read account ${ACCOUNT}`);
   });
+
+  test("IT-004 errors: errorClass decides over message words, so a syntax error mentioning timeout keeps its text (review R-8)", async () => {
+    const syntax = "NRQL Syntax error: unknown function timeout() near account permission";
+    nr.respond = () => ({ status: 200, body: { data: null, errors: [{ message: syntax, extensions: { errorClass: "INVALID_INPUT" } }] } });
+    const error = await rejection(poll(null));
+    assert.equal(error.data?.code, "source_params_invalid");
+    assert.equal(error.message, `New Relic rejected the query: ${syntax}`);
+    // A TIMEOUT class still maps to a failed request whatever the message says.
+    nr.respond = () => ({ status: 200, body: { data: null, errors: [{ message: "NRDB query failed", extensions: { errorClass: "TIMEOUT" } }] } });
+    const timeout = await rejection(poll(null));
+    assert.deepEqual([timeout.data?.code, timeout.message], ["source_extension_failed", "New Relic request failed: query timed out"]);
+  });
 });

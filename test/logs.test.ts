@@ -96,4 +96,19 @@ describe("newrelic/logs", () => {
     const result = await assertRowOrderInvariant(rows, ordered => poll(ordered));
     assert.deepEqual(result.items.map(item => item.key), ["payments", "auth", "cart"]);
   });
+
+  test("UT-071 logs: an API key in the facet parameter never appears in the item (review R-6)", async () => {
+    const raw = { ...BASE, facet: `svc.${FAKE_KEY}` };
+    const result = await poll([{ facet: "payments", count: 120 }], raw);
+    assert.equal(result.items.length, 1);
+    assert.equal(JSON.stringify(result).includes(FAKE_KEY), false);
+  });
+
+  test("IT-003b logs: a row without a numeric count is an unexpected response, not a params error (review R-3)", async () => {
+    for (const bad of [{ facet: "payments" }, { facet: "payments", count: "12" }]) {
+      const error = await rejection(poll([bad]));
+      assert.equal(error.data?.code, "source_extension_failed");
+      assert.equal(error.message, "New Relic request failed: unexpected response");
+    }
+  });
 });

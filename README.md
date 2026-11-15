@@ -111,6 +111,9 @@ The same probe runs once when the extension starts and writes one line to
 newrelic: probe region=us nerdgraph=ok mcp=available
 ```
 
+The startup line always probes the US region. EU accounts run
+`compozy extension exec newrelic --cmd doctor --region eu`.
+
 ## Golden path
 
 Add sources to an always-on agent's `HEARTBEAT.md` (with managed authoring or on the Heartbeat page):
@@ -222,8 +225,11 @@ Windows are `<n>m` or `<n>h`, from `5m` to `24h`. The source adds `SINCE <window
 | `threshold` | number | required | Breach boundary, strict (`>` for `above`, `<` for `below`). |
 
 - Key: the facet values joined with `/`, or `all` when the query has no `FACET`.
-- The value is the first numeric field of each row that is not the facet; `percentile(x, 95)` reads
-  as `p95 x`. A null value (no data) never breaches.
+- The value is the first numeric field of each row, skipping the facet, time buckets and the
+  attributes named in the query's `FACET` clause (D-11). Aggregates that return an object are read
+  this way: `apdex()` reads its score, and `percentile(x, 95)` reads as `p95 x`. An object holding
+  a single number reads as that number. An object holding several numbers fails with the shape
+  message, so the value is never guessed. A null value (no data) never breaches.
 - More than 500 rows fail with `source_params_invalid`; add `LIMIT` or narrow the `FACET`.
 - Item: `checkout-api above 1.5: 2.31 (p95 duration, account 1234567)`.
 
@@ -357,14 +363,14 @@ threshold: 100
 **Apdex per app (T = 0.5 s), below 0.85:**
 
 ```yaml
-nrql: "SELECT (filter(count(*), WHERE duration <= 0.5) + filter(count(*), WHERE duration > 0.5 AND duration <= 2) / 2) / count(*) FROM Transaction FACET appName SINCE 15 minutes ago LIMIT 100"
+nrql: "SELECT apdex(duration, t: 0.5) FROM Transaction FACET appName SINCE 15 minutes ago LIMIT 100"
 condition: below
 threshold: 0.85
 ```
 
-This spells out the Apdex formula on purpose. NRQL's `apdex()` returns an object with several
-numbers (`s`, `t`, `f`, the score), and the source reads the first number it finds, which may not
-be the score.
+`apdex()` returns several numbers, and the source reads its `score`. The same Apdex can also be
+written out as plain arithmetic:
+`SELECT (filter(count(*), WHERE duration <= 0.5) + filter(count(*), WHERE duration > 0.5 AND duration <= 2) / 2) / count(*) FROM Transaction FACET appName SINCE 15 minutes ago LIMIT 100`.
 
 **Infrastructure CPU per host (%), above 90:**
 

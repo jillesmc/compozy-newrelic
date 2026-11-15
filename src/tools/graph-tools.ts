@@ -36,7 +36,8 @@ export const listAccountsTool: NerdGraphTool = {
 
 /** A bare name becomes `name LIKE '<name>'`; text with an operator is passed as NerdGraph entity search. */
 export function entitySearchQuery(query: string): string {
-  if (/=|\bLIKE\b|\bIN\b/i.test(query)) return query;
+  // `IN` counts only as an operator, so a name like "check in api" stays a name (review R-9).
+  if (/=|\bLIKE\b|\bIN\s*\(/i.test(query)) return query;
   return `name LIKE '${query.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 }
 

@@ -122,19 +122,24 @@ export function accountError(accountId: unknown): SourceError {
   return sourceError("source_params_invalid", `this API key cannot read account ${String(accountId)}`);
 }
 
-/** Maps GraphQL `errors[]` on HTTP 200; external text is redacted before the 300-character bound. */
+/**
+ * Maps GraphQL `errors[]` on HTTP 200; external text is redacted before the 300-character bound.
+ * `extensions.errorClass` decides when present; the message heuristics apply only without a class, so
+ * a syntax error that merely mentions "timeout" or "account" keeps its own text (review R-8).
+ */
 function graphqlError(errors: GraphQLError[], accountId: unknown, redact: (text: string) => string): SourceError {
   const messages = errors.map(error => (typeof error.message === "string" ? error.message : ""));
-  const classes = errors.map(error => String(error.extensions?.errorClass ?? "").toUpperCase());
+  const classes = errors.map(error => String(error.extensions?.errorClass ?? "").toUpperCase()).filter(Boolean);
   const all = messages.join("; ");
-  if (classes.includes("UNAUTHORIZED") || /invalid (user )?api key/i.test(all)) {
+  const classified = classes.length > 0;
+  const is = (errorClass: string, heuristic: () => boolean) => (classified ? classes.includes(errorClass) : heuristic());
+  if (is("UNAUTHORIZED", () => /invalid (user )?api key/i.test(all))) {
     return sourceError("source_credential_expired", REJECTED_KEY_MESSAGE);
   }
-  if (classes.includes("TIMEOUT") || /timed? ?out/i.test(all)) {
+  if (is("TIMEOUT", () => /timed? ?out/i.test(all))) {
     return sourceError("source_extension_failed", "New Relic request failed: query timed out");
   }
-  const accessDenied =
-    classes.includes("FORBIDDEN") || /account/i.test(all) && /access|authori[sz]|permission|forbidden/i.test(all);
+  const accessDenied = is("FORBIDDEN", () => /account/i.test(all) && /access|authori[sz]|permission|forbidden/i.test(all));
   if (accessDenied && typeof accountId === "number") return accountError(accountId);
   const text = (redact(all) || "unknown error").slice(0, MAX_ERROR_CHARS);
   return sourceError("source_params_invalid", `New Relic rejected the query: ${text}`);

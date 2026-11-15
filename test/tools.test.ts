@@ -76,10 +76,33 @@ describe("investigation tools", () => {
     assertBounded(many.result);
 
     const wide = await run(nrqlQueryTool, { account_id: ACCOUNT, nrql: "SELECT *" }, () => range(50).map(i => ({ n: i, text: "x".repeat(1000) })));
-    assert.ok(wide.rows.length < 50 && wide.rows.length > 0);
+    // Cells are clipped harder before any row is dropped (review R-2).
+    assert.equal(wide.rows.length, 50);
     assert.equal(wide.result.truncated, true);
-    assert.equal((wide.rows[0]?.text as string).length, 300);
+    assert.ok((wide.rows[0]?.text as string).length < 300);
     assertBounded(wide.result);
+
+    // 400 wide columns: only the leading columns that fit are kept, with data.
+    const names = range(400).map(i => `attribute.with.a.long.name.${String(i).padStart(3, "0")}`);
+    const columnsWide = await run(nrqlQueryTool, { account_id: ACCOUNT, nrql: "SELECT *" }, () =>
+      range(3).map(i => Object.fromEntries(names.map(name => [name, i])))
+    );
+    const kept = Object.keys(columnsWide.rows[0] ?? {});
+    assert.ok(kept.length > 0 && kept.length < 400, `${kept.length} columns`);
+    assert.deepEqual(kept, names.slice(0, kept.length));
+    assert.ok(columnsWide.rows.length >= 1);
+    assert.equal(columnsWide.result.truncated, true);
+    assertBounded(columnsWide.result);
+
+    // One row of about 20 KiB still comes back, clipped.
+    const big = await run(nrqlQueryTool, { account_id: ACCOUNT, nrql: "SELECT * FROM Log" }, () => [
+      Object.fromEntries(range(70).map(i => [`f${i}`, "y".repeat(300)])),
+    ]);
+    assert.equal(big.rows.length, 1);
+    assert.equal(Object.keys(big.rows[0] ?? {}).length, 70);
+    assert.ok((big.rows[0]?.f0 as string).length < 300);
+    assert.equal(big.result.truncated, true);
+    assertBounded(big.result);
   });
 
   test("UT-091 list_accounts: {id, name} sorted by id, at most 50", async () => {
@@ -96,6 +119,9 @@ describe("investigation tools", () => {
     assert.equal(entitySearchQuery("checkout"), "name LIKE 'checkout'");
     assert.equal(entitySearchQuery("o'neil"), "name LIKE 'o\\'neil'");
     assert.equal(entitySearchQuery("domain = 'APM'"), "domain = 'APM'");
+    // R-9: the word "in" inside a name is not the IN operator.
+    assert.equal(entitySearchQuery("check in api"), "name LIKE 'check in api'");
+    assert.equal(entitySearchQuery("type IN ('APPLICATION', 'HOST')"), "type IN ('APPLICATION', 'HOST')");
     const { rows, result, calls } = await run(searchEntitiesTool, { query: "checkout" }, () => ({
       actor: { entitySearch: { results: { entities: range(30).map(i => ({ guid: `G${i}`, name: `checkout-${i}`, type: "APPLICATION", domain: "APM", alertSeverity: "NOT_ALERTING", tags: ["x"] })) } } },
     }));
@@ -167,7 +193,7 @@ describe("investigation tools", () => {
     ]);
     assert.equal(
       calls[0]?.gql,
-      "SELECT count(*), max(timestamp) FROM TransactionError WHERE appName = 'checkout-api' FACET appName, error.class, error.message SINCE 60 minutes ago LIMIT 500"
+      "SELECT count(*), max(timestamp) FROM TransactionError WHERE appName = 'checkout-api' FACET appName, error.class, error.message SINCE 60 minutes ago LIMIT 501"
     );
     assert.deepEqual(rows[0], { app: "checkout-api", class: "NotFound", message: "Order # not found", count: 7, last_seen: NOW.replace("Z", ".000Z") });
     assert.equal(rows[1]?.class, "Timeout");
@@ -179,6 +205,17 @@ describe("investigation tools", () => {
     assert.equal(many.rows[0]?.class, "E39");
     assert.equal((many.rows[0]?.message as string).length, 160);
     assertBounded(many.result);
+  });
+
+  test("UT-094 error_groups: LIMIT 501 detects a cut facet list; the extra row is dropped (review R-4)", async () => {
+    // Every row is the same group, so only the row count decides `truncated`.
+    const rows = (n: number) => range(n).map(() => ({ facet: ["a", "E", "boom"], count: 1 }));
+    const exact = await run(errorGroupsTool, { account_id: ACCOUNT }, () => rows(500));
+    assert.match(exact.calls[0]!.gql, /LIMIT 501$/);
+    assert.deepEqual([exact.rows.length, exact.rows[0]?.count, exact.result.truncated], [1, 500, false]);
+    const cut = await run(errorGroupsTool, { account_id: ACCOUNT }, () => rows(501));
+    assert.deepEqual([cut.rows.length, cut.rows[0]?.count, cut.result.truncated], [1, 500, true]);
+    assertBounded(cut.result);
   });
 
   test("UT-095 recent_logs: at most 50 lines of at most 300 characters", async () => {

@@ -637,3 +637,15 @@ No CompozyOS config keys added. The existing `[agents.heartbeat.sources]` `max_i
   `compozy mcp auth login newrelic --scope user --owner extension:newrelic` makes its tools callable
   even with `external_default = "disabled"` (`docs/extensions/install.mdx`).
 
+- **D-11 (2026-11-15, repair round 1 / review R-1 and R-11, recorded before coding): the `newrelic/nrql`
+  value reader for object-valued aggregates and FACET attributes.** The Queries text ("the first
+  numeric field of each row that is not a facet") misreads aggregates that return an object of several
+  numbers: `apdex()` returns `{s, t, f, count, score}` and was read as `s` or `count`. Change, for a
+  field whose value is an object: (1) a numeric (or null) `score` entry is the value (label `<field>`,
+  e.g. `apdex`); (2) `percentile.<attr>` keeps reading its first percentile (label `p<n> <attr>`);
+  (3) otherwise an object with exactly one numeric (or null) entry is read as before, and an object
+  with more than one numeric entry fails with the shape message (`source_params_invalid`,
+  `nrql must return one number per row …`) instead of being misread. Fields whose name is an
+  attribute of the query's `FACET` clause (parsed from the text after `FACET` up to `SINCE`, `UNTIL`,
+  `LIMIT`, `TIMESERIES`, `COMPARE`, `ORDER` or the end; `AS` aliases and backtick quoting handled)
+  are skipped, so an echoed numeric facet attribute is never read as the value.

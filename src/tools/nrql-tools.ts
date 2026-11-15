@@ -7,6 +7,7 @@ import { ACCOUNT_PROPERTIES, accountId, type NerdGraphTool } from "./tool.ts";
 
 export const MAX_NRQL_ROWS = 50;
 export const MAX_GROUPS = 25;
+const MAX_FACET_ROWS = 500;
 export const MAX_LOG_LINES = 50;
 export const MAX_LOG_CHARS = 300;
 
@@ -25,7 +26,7 @@ export const nrqlQueryTool: NerdGraphTool = {
     const results = await ctx.client.nrql(accountId(input), nrql, ctx.signal);
     const columns = [...new Set(results.flatMap(row => Object.keys(row)))];
     const rows = results.map(row => Object.fromEntries(columns.map(column => [column, cell(row[column])])));
-    return boundedResult({ rows, cap: MAX_NRQL_ROWS, render: shown => renderTable(shown, columns) });
+    return boundedResult({ rows, cap: MAX_NRQL_ROWS, columns, render: renderTable });
   },
 };
 
@@ -48,9 +49,12 @@ export const errorGroupsTool: NerdGraphTool = {
     const minutes = parseWindow(input.window, "30m");
     const nrql =
       `SELECT count(*), max(timestamp) FROM TransactionError${where ? ` WHERE ${where}` : ""} ` +
-      `FACET appName, error.class, error.message ${sinceClause(minutes)} LIMIT 500`;
+      `FACET appName, error.class, error.message ${sinceClause(minutes)} LIMIT ${MAX_FACET_ROWS + 1}`;
+    // One extra row makes a cut detectable (as D-9 does for the sources, review R-4).
+    const results = await ctx.client.nrql(accountId(input), nrql, ctx.signal);
+    const more = results.length > MAX_FACET_ROWS;
     const groups = new Map<string, { app: string; class: string; message: string; count: number; last: number }>();
-    for (const row of await ctx.client.nrql(accountId(input), nrql, ctx.signal)) {
+    for (const row of results.slice(0, MAX_FACET_ROWS)) {
       const facet = Array.isArray(row.facet) ? row.facet : [];
       const [app, errorClass, message] = [0, 1, 2].map(i => (facet[i] === null || facet[i] === undefined ? "" : String(facet[i])));
       const normalized = normalizeMessage(message ?? "");
@@ -70,7 +74,7 @@ export const errorGroupsTool: NerdGraphTool = {
         last_seen: group.last ? new Date(group.last).toISOString() : null,
       }));
     const columns = ["app", "class", "count", "last_seen", "message"];
-    return boundedResult({ rows, cap: MAX_GROUPS, render: shown => renderLines(shown, columns) });
+    return boundedResult({ rows, cap: MAX_GROUPS, more, render: shown => renderLines(shown, columns) });
   },
 };
 

@@ -97,4 +97,18 @@ describe("tools and doctor against the fake NerdGraph and MCP", () => {
     assert.ok(!lines.join("").includes(FAKE_KEY));
     assert.deepEqual(nr.requests.map(request => request.path).sort(), ["/graphql", "/mcp/"]);
   });
+
+  test("IT-012 tools: the per-call budget ends a slow call with tool budget exceeded (review R-5)", async () => {
+    // The fake holds the answer for 11 s; an injected 100 ms budget stands in for the 25 s default.
+    nr.respond = () => ({ status: 200, body: { data: {} }, delayMs: 11_000 });
+    const tool = TOOLS.find(entry => entry.name === "nrql_query")!;
+    const started = performance.now();
+    await assert.rejects(
+      Promise.resolve(
+        toolHandler(tool, { env, budgetMs: 100 })({ input: { region: nr.region, account_id: ACCOUNT, nrql: "SELECT 1" } } as never)
+      ),
+      { message: "New Relic request failed: tool budget exceeded", data: { code: "extension_failed" } }
+    );
+    assert.ok(performance.now() - started < 5_000);
+  });
 });

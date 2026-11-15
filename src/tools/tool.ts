@@ -4,6 +4,7 @@ import { paramsError } from "../errors.ts";
 import { redactDeep, redactor } from "../items.ts";
 import { createNerdGraphClient, regionEndpoints, resolveApiKey, type NerdGraphClient, type RegionEndpoints } from "../nerdgraph.ts";
 import { parseRegion, REGION_PATTERN } from "../params.ts";
+import { withBudget } from "../poll.ts";
 
 /** Per-call budget for a tool (same as a source poll). */
 export const TOOL_BUDGET_MS = 25_000;
@@ -13,6 +14,8 @@ export interface ToolDeps {
   fetch?: typeof fetch;
   requestTimeoutMs?: number;
   mcpTimeoutMs?: number;
+  /** Per-call budget; defaults to TOOL_BUDGET_MS. */
+  budgetMs?: number;
   /** Clock for `since` filters; defaults to the wall clock. */
   now?: () => Date;
 }
@@ -71,12 +74,12 @@ export function nerdgraphTool(tool: NerdGraphTool): ToolDefinition {
         query: async (gql, variables, signal) => redactDeep(await raw.query(gql, variables, signal), redact),
         nrql: async (id, nrql, signal) => redactDeep(await raw.nrql(id, nrql, signal), redact),
       };
-      return tool.run(input, {
-        client,
-        endpoints: regionEndpoints(region),
-        signal: AbortSignal.timeout(TOOL_BUDGET_MS),
-        now: deps.now ?? (() => new Date()),
-      });
+      // Same budget handling as a poll, so a slow call reports "tool budget exceeded" (review R-5).
+      return await withBudget(
+        deps.budgetMs ?? TOOL_BUDGET_MS,
+        signal => tool.run(input, { client, endpoints: regionEndpoints(region), signal, now: deps.now ?? (() => new Date()) }),
+        "tool"
+      );
     },
   };
 }

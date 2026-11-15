@@ -47,12 +47,17 @@ export function createPollHandler(source: SourceDefinition, deps: PollDeps = {})
   };
 }
 
-async function withBudget<T>(budgetMs: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+/** Runs `run` under a deadline that aborts its signal and rejects with a source_extension_failed error. */
+export async function withBudget<T>(
+  budgetMs: number,
+  run: (signal: AbortSignal) => Promise<T>,
+  what = "poll"
+): Promise<T> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const budget = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      const error = sourceError("source_extension_failed", "New Relic request failed: poll budget exceeded");
+      const error = sourceError("source_extension_failed", `New Relic request failed: ${what} budget exceeded`);
       controller.abort(error);
       reject(error);
     }, budgetMs);

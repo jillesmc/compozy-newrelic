@@ -6,7 +6,7 @@ import type { HeartbeatSourceResult } from "@compozy/extension-sdk";
 import { redactor } from "../src/items.ts";
 import { regionEndpoints } from "../src/nerdgraph.ts";
 import { KEY_PATTERN } from "../src/normalize.ts";
-import { nrqlSource, parseNrqlParams } from "../src/sources/nrql.ts";
+import { facetFields, nrqlSource, parseNrqlParams } from "../src/sources/nrql.ts";
 import {
   ACCOUNT,
   assertRowOrderInvariant,
@@ -166,5 +166,43 @@ describe("newrelic/nrql", () => {
     assert.equal(error.data?.code, "source_params_invalid");
     assert.throws(() => parseNrqlParams({ ...BASE, region: "loopback:70000" }), /region must be us or eu/);
     assert.equal(parseNrqlParams({ ...BASE, region: "loopback:8788" }).region, "loopback:8788");
+  });
+
+  test("UT-032 nrql: apdex() reads its score in either key order; a null score is inactive (D-11)", async () => {
+    const raw = { account_id: ACCOUNT, nrql: "SELECT apdex(duration, t: 0.5) FROM Transaction FACET appName SINCE 15 minutes ago", condition: "below", threshold: 0.85 };
+    const state = { v: 1, fp: parseNrqlParams(raw).fingerprint, active: [] };
+    const rows = [
+      { facet: "checkout-api", appName: "checkout-api", apdex: { s: 900, t: 50, f: 10, count: 960, score: 0.8 } },
+      { facet: "cart", appName: "cart", apdex: { count: 960, f: 10, s: 900, score: 0.95, t: 50 } },
+      { facet: "search", appName: "search", apdex: { count: 0, f: 0, s: 0, score: null, t: 0 } },
+      { facet: "pay", appName: "pay", apdex: { count: 9, f: 1, s: 2, score: 0.5, t: 6 } },
+    ];
+    const result = await poll(rows, state, raw);
+    assert.deepEqual(keysOf(result), ["pay", "checkout-api"]);
+    assert.equal(result.items[1]?.title, `checkout-api below 0.85: 0.8 (apdex, account ${ACCOUNT})`);
+    assert.equal((result.items[1]?.attributes as Record<string, unknown>).value, 0.8);
+  });
+
+  test("UT-030 nrql: an aggregate object with several numbers and no score fails with the shape message (D-11)", async () => {
+    const error = await rejection(poll([{ facet: "a", histogram: { "0": 4, "10": 7 } }]));
+    assert.equal(error.data?.code, "source_params_invalid");
+    assert.equal(error.message, "nrql must return one number per row (e.g. SELECT count(*) ... FACET x)");
+    // One number in an object is still unambiguous.
+    const single = await poll([{ facet: "a", "uniqueCount.user": { value: 9 } }]);
+    assert.equal(single.items[0]?.title, `a above 1.5: 9 (uniqueCount.user.value, account ${ACCOUNT})`);
+  });
+
+  test("UT-033 nrql: a numeric FACET attribute echoed in the row is never read as the value (D-11)", async () => {
+    const raw = { account_id: ACCOUNT, nrql: "SELECT count(*) FROM Transaction FACET http.statusCode SINCE 1 hour ago", threshold: 100 };
+    const state = { v: 1, fp: parseNrqlParams(raw).fingerprint, active: [] };
+    const result = await poll([{ facet: 500, "http.statusCode": 500, count: 3 }, { facet: 503, "http.statusCode": 503, count: 120 }], state, raw);
+    assert.deepEqual(keysOf(result), ["503"]);
+    assert.equal(result.items[0]?.title, `503 above 100: 120 (count, account ${ACCOUNT})`);
+    assert.deepEqual(
+      [...facetFields("SELECT count(*) FROM T FACET appName, `host.name`, cases(WHERE x > 1 AS 'big') AS bucket, region AS r LIMIT 10")],
+      ["appName", "host.name", "bucket", "region", "r"]
+    );
+    assert.deepEqual([...facetFields("SELECT count(*) FROM T SINCE 1 hour ago")], []);
+    assert.deepEqual([...facetFields("SELECT count(*) FROM T FACET appName TIMESERIES")], ["appName"]);
   });
 });

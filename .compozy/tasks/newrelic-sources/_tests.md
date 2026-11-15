@@ -58,14 +58,14 @@ Canonical test contract. Companion to `_spec.md`; derived from `_user_stories.md
 - **UT-030** (error): rows without a numeric non-facet field → `source_params_invalid` with the shape message.
 - **UT-031** (boundary): 501 rows → `source_params_invalid` with the LIMIT message; 500 rows are accepted.
 - **UT-032** (boundary): a null value → inactive.
-- **UT-033** (happy): facet arrays `["checkout-api","prod"]` → key `checkout-api/prod`; no facet → `_`.
+- **UT-033** (happy): facet arrays `["checkout-api","prod"]` → key `checkout-api/prod`; no facet → `all` (D-2).
 
 ### issues kind
 
 - **UT-040** (happy): with `priorities [CRITICAL,HIGH]`, a LOW issue gives no signal and a CRITICAL issue gives a signal keyed by `issueId`.
 - **UT-041** (ordering): CRITICAL ranks before HIGH, then older activation first.
 - **UT-042** (state): an issue absent from the open list (closed) drops from state; the same id open again → item.
-- **UT-043** (happy): the `entity_guids` and `policy_ids` filters are passed into the query variables.
+- **UT-043** (happy): the `entity_guids` filter is written into the aiIssues query text (D-4: no `policy_ids`; filter and cursor are GraphQL literals, only `$id` is a variable).
 
 ### errors kind and normalize
 
@@ -78,7 +78,7 @@ Canonical test contract. Companion to `_spec.md`; derived from `_user_stories.md
 ### logs kind
 
 - **UT-060** (boundary): `threshold 50`: 50 is inactive and 51 is active.
-- **UT-061** (happy): no facet → single key `_`; the NRQL has no FACET clause.
+- **UT-061** (happy): no facet → single key `all` (D-2); the NRQL has no FACET clause.
 - **UT-062** (happy): the item summary and attributes contain no field named `message` or raw line content.
 
 ### items and keys
@@ -116,7 +116,7 @@ Canonical test contract. Companion to `_spec.md`; derived from `_user_stories.md
 
 - **IT-001**: the nrql source across three polls (below, above, above) returns items 0, 1, 0, and the request carries `API-Key` and the NRQL variable.
 - **IT-002**: issues source pagination with `nextCursor` across 2 pages merges the results.
-- **IT-003**: the errors and logs sources build the expected NRQL text (`SINCE 30 minutes ago`, `LIMIT 500`).
+- **IT-003**: the errors and logs sources build the expected NRQL text (`SINCE 30 minutes ago`, `LIMIT 501`, D-9).
 - **IT-004**: HTTP 200 with `errors:[{message:"NRQL Syntax error…"}]` → `source_params_invalid` with the message ≤ 300 characters.
 - **IT-005**: 401 → `source_credential_expired`, and the message never contains the key.
 - **IT-006**: 403 with an auth error → `source_credential_expired`.

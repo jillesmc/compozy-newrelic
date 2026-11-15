@@ -101,6 +101,7 @@ function logsItem(
   now: string,
   context: Pick<SourceContext, "endpoints" | "redact">
 ) {
+  const facet = params.facet === null ? null : context.redact(params.facet); // reflected param (R-6)
   const lines = `${formatNumber(count)} log lines in ${params.windowText} (threshold ${params.threshold})`;
   return shapeItem({
     key,
@@ -109,7 +110,7 @@ function logsItem(
       "Log spike",
       `account ${params.accountId} (${params.region})`,
       lines,
-      ...(group !== null ? [`${params.facet}: ${group}`] : []),
+      ...(group !== null ? [`${facet}: ${group}`] : []),
       `checked ${isoUtc(now)}`,
     ].join(" · "),
     url: context.endpoints.web,
@@ -117,7 +118,7 @@ function logsItem(
       kind: "logs",
       account_id: params.accountId,
       region: params.region,
-      facet: params.facet,
+      facet,
       group,
       count,
       window: params.windowText,

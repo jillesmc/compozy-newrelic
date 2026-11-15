@@ -1,7 +1,7 @@
 import type { HeartbeatSourceRequest, HeartbeatSourceResult, JSONValue } from "@compozy/extension-sdk";
 
 import { fingerprint, sortRows, transition, type Signal } from "../engine.ts";
-import { paramsError } from "../errors.ts";
+import { paramsError, sourceError } from "../errors.ts";
 import { formatNumber, isoUtc, redactDeep, shapeItem, truncateChars } from "../items.ts";
 import { sanitizeKey } from "../normalize.ts";
 import { asObject, COMMON_PROPERTIES, parseCommon, requiredNumber, requiredString } from "../params.ts";
@@ -59,20 +59,63 @@ export interface NrqlRowValue {
   value: number | null;
 }
 
-/** First numeric non-facet field of a row; `{"percentile.duration": {"95": 2.31}}` reads as p95. */
-export function readRow(row: Record<string, unknown>): NrqlRowValue {
+/**
+ * The measured value of a row (D-11): the first numeric field that is neither the facet, a time bucket
+ * nor a FACET attribute. An object value is read through `score` (apdex), its first percentile
+ * (`{"percentile.duration": {"95": 2.31}}` reads as p95), or its only number; an object with several
+ * numbers is ambiguous and fails with the shape message.
+ */
+export function readRow(row: Record<string, unknown>, facetFields: ReadonlySet<string> = new Set()): NrqlRowValue {
   const facet = facetOf(row);
-  // ponytail: a numeric FACET attribute listed before the aggregate would be read as the value;
-  // parse the FACET clause if real queries hit it.
   for (const [field, entry] of Object.entries(row)) {
-    if (TIME_FIELDS.has(field)) continue;
+    if (TIME_FIELDS.has(field) || facetFields.has(field)) continue;
     if (typeof entry === "number" || entry === null) return { facet, label: field, value: entry };
     if (entry && typeof entry === "object" && !Array.isArray(entry)) {
-      const nested = Object.entries(entry).find(([, inner]) => typeof inner === "number" || inner === null);
-      if (nested) return { facet, label: nestedLabel(field, nested[0]), value: nested[1] as number | null };
+      const object = entry as Record<string, unknown>;
+      if (typeof object.score === "number" || object.score === null) return { facet, label: field, value: object.score };
+      const numbers = Object.entries(object).filter(([, inner]) => typeof inner === "number" || inner === null);
+      const percentile = /^percentile\.(.+)$/.exec(field);
+      if (numbers.length > 1 && !percentile) throw paramsError(SHAPE_MESSAGE);
+      const [first] = numbers;
+      if (first) {
+        const label = percentile ? `p${first[0]} ${percentile[1]}` : `${field}.${first[0]}`;
+        return { facet, label, value: first[1] as number | null };
+      }
     }
   }
   throw paramsError(SHAPE_MESSAGE);
+}
+
+const FACET_END = /\b(?:SINCE|UNTIL|LIMIT|TIMESERIES|COMPARE|ORDER|WITH|EXTRAPOLATE|SLIDE)\b/i;
+
+/** Attribute names and aliases listed in the query's FACET clause (D-11), skipped by `readRow`. */
+export function facetFields(nrql: string): Set<string> {
+  const fields = new Set<string>();
+  const start = /\bFACET\b/i.exec(nrql);
+  if (!start) return fields;
+  let clause = nrql.slice(start.index + start[0].length);
+  const end = FACET_END.exec(clause);
+  if (end) clause = clause.slice(0, end.index);
+  let depth = 0;
+  let part = "";
+  const parts: string[] = [];
+  for (const ch of clause) {
+    if (ch === "(") depth++;
+    if (ch === ")") depth--;
+    if (ch === "," && depth === 0) {
+      parts.push(part);
+      part = "";
+    } else part += ch;
+  }
+  parts.push(part);
+  for (const raw of parts) {
+    const unquote = (text: string) => text.trim().replace(/^[`'"]|[`'"]$/g, "");
+    const aliased = /^([\s\S]*\S)\s+AS\s+([^\s()]+)\s*$/i.exec(raw.trim()); // the top-level alias is last
+    const expr = unquote(aliased ? aliased[1]! : raw);
+    if (expr && !expr.includes("(")) fields.add(expr);
+    if (aliased) fields.add(unquote(aliased[2]!));
+  }
+  return fields;
 }
 
 /** A row's facet tuple (`facet` holds one value or an array), or null without FACET. */
@@ -81,15 +124,13 @@ export function facetOf(row: Record<string, unknown>): string[] | null {
   return raw === undefined ? null : (Array.isArray(raw) ? raw : [raw]).map(part => String(part));
 }
 
-/** The `count(*)` value of a counting row (errors, logs); its FACET attributes are never read as the count. */
+/**
+ * The `count(*)` value of a counting row (errors, logs). Their NRQL is built by the extension, so a
+ * missing count is an unexpected response, not a parameter problem (review R-3).
+ */
 export function countOf(row: Record<string, unknown>): number {
-  if (typeof row.count !== "number") throw paramsError(SHAPE_MESSAGE);
+  if (typeof row.count !== "number") throw sourceError("source_extension_failed", "New Relic request failed: unexpected response");
   return row.count;
-}
-
-function nestedLabel(field: string, inner: string): string {
-  const percentile = /^percentile\.(.+)$/.exec(field);
-  return percentile ? `p${inner} ${percentile[1]}` : `${field}.${inner}`;
 }
 
 export function nrqlKey(facet: string[] | null): string {
@@ -105,8 +146,9 @@ export function nrqlSignals(
 ): Signal[] {
   if (rows.length > MAX_NRQL_ROWS) throw paramsError(ROWS_MESSAGE);
   const byKey = new Map<string, Signal>();
+  const skip = facetFields(params.nrql);
   for (const row of sortRows(redactDeep(rows, context.redact))) {
-    const read = readRow(row);
+    const read = readRow(row, skip);
     if (read.value === null) continue;
     const margin = params.condition === "above" ? read.value - params.threshold : params.threshold - read.value;
     if (!(margin > 0)) continue;

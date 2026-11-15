@@ -70,7 +70,7 @@ Acceptance criteria:
 
 Edge cases:
 
-- EC-1: `entity_guids` or `policy_ids` given → only matching issues count.
+- EC-1: `entity_guids` given → only matching issues count (`policy_ids` dropped: issues carry no policy; Deviation D-4).
 - EC-2: An issue reopens with the same id after closing → returned again.
 - EC-3: More open issues than fit the tracked capacity → `source_params_invalid` asking to narrow filters.
 

@@ -112,6 +112,8 @@ export function createMcpClient(region: Region, apiKey: string, options: McpClie
     if (status === 401) return new McpError("credential_expired", REJECTED_KEY_MESSAGE, status);
     if (status === 403) return new McpError("forbidden", clip(answer.text) || "HTTP 403", status);
     if (status === 429) return new McpError("rate_limited", "New Relic rate limit reached; retry later", status);
+    // Without a session, a 404 is not an expiry: the MCP endpoint is not there for this key (R-7).
+    if (status === 404) return new McpError("unavailable", "HTTP 404", status);
     return new McpError("request_failed", `HTTP ${status}`, status);
   }
 
@@ -153,7 +155,11 @@ export function createMcpClient(region: Region, apiKey: string, options: McpClie
       const expired = !!sessionId && (answer.status === 404 || (answer.status === 400 && /session/i.test(answer.text)));
       if (!expired) return rpcAnswer(answer, id);
       if (session === current) session = undefined;
-      if (attempt > 0) throw new McpError("request_failed", "session expired twice", answer.status);
+      // A 404 that persists after the one re-initialize is a regional refusal (review R-7, D-19.9).
+      if (attempt > 0) {
+        if (answer.status === 404) throw new McpError("unavailable", "HTTP 404", 404);
+        throw new McpError("request_failed", "session expired twice", answer.status);
+      }
     }
   }
 

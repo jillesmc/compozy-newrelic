@@ -6,7 +6,7 @@ import type { ToolResult } from "@compozy/extension-sdk";
 import { TestHarness } from "@compozy/extension-sdk/testing";
 
 import { createExtension } from "../src/index.ts";
-import { toolHandler, TOOLS } from "../src/tools/index.ts";
+import { createProxyCatalog, toolHandler, TOOLS } from "../src/tools/index.ts";
 import { type FakeNerdGraph, startFakeNerdGraph } from "./fake-nerdgraph.ts";
 import { ACCOUNT, FAKE_KEY } from "./helpers.ts";
 
@@ -89,13 +89,16 @@ describe("tools and doctor against the fake NerdGraph and MCP", () => {
       fetch(url.replace(/^https:\/\/(api|mcp)\.newrelic\.com/, `http://127.0.0.1:${nr.port}`), init)) as typeof fetch;
     nr.respond = request => (request.path === "/graphql" ? { status: 200, body: { data: { actor: { accounts: [{ id: 1 }] } } } } : undefined);
     const harness = new TestHarness({ stderr: new Writable({ write: (_chunk, _encoding, done) => done() }) });
-    await harness.loadExtension(options => createExtension(options, { env, fetch: routed, stderr }));
+    // The process catalog the tools use; the startup probe must feed it (D-19.1).
+    const mcp = createProxyCatalog({ env, fetch: routed, stderr });
+    await harness.loadExtension(options => createExtension(options, { env, fetch: routed, stderr, mcp }));
     for (let i = 0; i < 100 && lines.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 10));
     await new Promise(resolve => setTimeout(resolve, 50));
     assert.deepEqual(lines, ["newrelic: probe region=us nerdgraph=ok mcp=available\n"]);
     assert.ok(!lines.join("").includes(FAKE_KEY));
     assert.deepEqual([...new Set(nr.requests.map(request => request.path))].sort(), ["/graphql", "/mcp/"]);
     assert.ok(!nr.mcpFake.requests.some(request => request.method === "tools/call"));
+    assert.equal(mcp.state("us"), "available", "the startup probe result is the proxy's region state");
   });
 
   test("IT-012 tools: the per-call budget ends a slow call with tool budget exceeded (review R-5)", async () => {

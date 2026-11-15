@@ -487,7 +487,8 @@ disappear within 10 minutes, without an extension release.
   `is_error: true` with the remote message in `text`.
 - Text content is joined and cut at 16 KiB. `structured` is passed through only when it fits in
   16 KiB. Images and other non-text parts become one-line placeholders.
-- Calls time out after 60 s (other requests after 10 s). An expired MCP session is re-initialized once.
+- Calls time out after 60 s (other requests after 10 s). An expired MCP session is re-initialized
+  once; a 404 that persists after that means the MCP is unavailable for the key.
 - The key is redacted from every result and error.
 
 Refusals and errors:
@@ -523,8 +524,9 @@ until then both tools answer `mcp_unavailable` at once. After any other probe fa
 5xx, network) the call that probed gets the matching error above, and calls in the next minute get
 `mcp_unavailable` with the same reason. A catalog whose refresh keeps failing (5xx, network,
 timeout) is used for at most 10 more minutes after its last success, then the region is
-`unavailable`. An `initialize` 403 or 404 when a call renews its
-session also makes the region `unavailable`. The doctor and the startup probe share this state and
+`unavailable`. A 401 on a warm catalog makes the region `unavailable` too. An `initialize` 403 or
+404 when a call renews its session, or a 404 that persists after renewing it, also makes the region
+`unavailable`. The doctor and the startup probe share this state and
 override any cached catalog: if the doctor reports `unavailable`, the next proxy call answers at
 once without a request. Each region
 state change seen by the proxy writes one line

@@ -77,17 +77,19 @@ describe("MCP proxy against the fake Streamable HTTP MCP", () => {
     await assertCalls();
   });
 
-  test("IT-104 session: an expired session (404) is re-initialized once and the call succeeds; twice fails", async () => {
+  test("IT-104 session: an expired session (404) is re-initialized once and the call succeeds; a second 404 makes the region unavailable", async () => {
     await h.call("mcp_tools");
     h.nr.mcpFake.expireCalls = 1;
     assert.equal(out(await h.call("mcp_call", { tool: "chart_report" })).is_error, false);
     assert.deepEqual(methods().slice(3), ["tools/call", "initialize", "notifications/initialized", "tools/call"]);
     h.nr.mcpFake.expireCalls = 2;
+    // A 404 that persists after the one re-initialize is a regional refusal (D-19.9).
     assert.deepEqual(await toolFailure(h.call("mcp_call", { tool: "chart_report" })), {
-      code: "mcp_request_failed",
-      message: "session expired twice",
+      code: "mcp_unavailable",
+      message: "New Relic MCP unavailable for this API key (404); use the ext__newrelic__* NerdGraph tools",
     });
     assert.equal(methods().filter(method => method === "initialize").length, 3);
+    assert.equal(h.mcp.state(h.nr.region), "unavailable");
   });
 
   test("IT-104 session: an initialize 403 on a re-handshake makes the region unavailable; nothing more is sent (R-5)", async () => {

@@ -496,3 +496,11 @@ S2 and S3 can run in parallel after S1.
      other 403 on `tools/call` is region-wide: the region becomes `unavailable` (standard
      `mcp_unavailable` text, re-probed after one TTL), and no tool is learned. Learning from a
      JSON-RPC error or an `isError` result containing `requires OAuth` (BR-2, D-12) is unchanged.
+  9. **A persistent 404 is a refusal** (review round 3, R-7). The one session re-initialize of BR-10
+     is kept. A 404 that persists after it, on `tools/list` or on `tools/call`, now fails as
+     `unavailable` (HTTP 404) instead of `request_failed: session expired twice`. So does a 404 on a
+     request sent without a session. The region becomes `unavailable` with the standard
+     `mcp_unavailable` text and is re-probed after one TTL. IT-104's second expiry now expects that
+     instead of `mcp_request_failed`. A repeated 400 `session` error is still `request_failed`. A
+     doctor or startup probe that joins a refresh already in flight keeps the authority D-19.7 gives
+     it: if the refresh graced a transient failure, the region still becomes `unknown`.

@@ -216,9 +216,14 @@ export function createMcpCatalog(options: McpCatalogOptions): McpCatalog {
     },
     async probe(region) {
       const current = entry(region);
+      const joined = current.refreshing !== undefined;
       current.refreshing ??= refresh(region, current, true).finally(() => (current.refreshing = undefined));
       await current.refreshing;
-      return current.lastFailure;
+      const failure = current.lastFailure;
+      // A probe that joined an ordinary refresh keeps its authority (review R-5): a transient failure
+      // that the refresh graced still makes the warm region unknown. Refusals are never graced.
+      if (joined && failure && current.state === "available") setState(region, current, "unknown", reasonOf(failure), undefined, true);
+      return failure;
     },
   };
 }

@@ -398,3 +398,35 @@ S2 and S3 can run in parallel after S1.
   levels below a result column: `a: {b: {c: {d: {e: 1}}}}` becomes `a.b.c.d: {"e":1}`. Arrays and
   empty objects are not expanded; they stay compact JSON cells. Flattening applies only to
   `nrql_query`, before the existing column, cell (300 characters) and 8 KiB bounds.
+- **D-18 (2026-11-15, repair R1 / defect F-1, recorded before coding): tool errors are CompozyOS
+  ToolErrors.** In local E2E against the 0.7.0 daemon, every extension tool error reached agents as a
+  bare `tool_backend_failed: tool backend failed`. This hid the `_dx.md` refusal and error texts, BR-4
+  and BR-5, and the v0.1 tool errors. Evidence (CompozyOS source):
+  - `internal/extension/tool_runtime.go:114-136` (`extensionToolCallError`) keeps an extension error
+    only when the JSON-RPC `data` decodes as `toolspkg.ToolError`
+    (`internal/tools/errors.go:112-122`: `{code, message, reason_codes?, operator?}`), its `code`
+    passes `extensionToolErrorCodeAllowed` (`tool_runtime.go:138-155`), and `message` is non-empty.
+  - Our `data.code` values (`mcp_tool_not_exposed`, `credential_absent`, …) fail that check, so the
+    error became generic.
+  - `internal/mcp/executor_redaction.go:134-160` then preserves a ToolError's code and message for
+    hosted MCP clients.
+  - `reason_codes` must be documented values (`internal/tools/reason.go:321-326`), so the extension
+    sends none.
+
+  Change: only the tool path changes, in `toolError` in `src/tools/format.ts`, where every tool
+  handler failure is converted. The JSON-RPC error is -32000. Its message and `data.message` are both
+  `<extension code>[ (<reason>)]: <text>`, bounded to 1000 characters; texts are already redacted
+  (BR-7). `data` is exactly `{code, message}`, with `code` mapped as follows:
+
+  | Extension code | `data.code` |
+  | --- | --- |
+  | `params_invalid` | `tool_invalid_input` |
+  | `mcp_tool_not_exposed` (reason `oauth_only`, `not_read_only`, `unknown_tool`) | `tool_denied` |
+  | `mcp_unavailable`, `credential_absent`, `credential_expired`, `rate_limited` | `tool_unavailable` |
+  | `extension_failed`, `mcp_request_failed` with `no answer within`, `budget exceeded` or `timed out` | `tool_timed_out` |
+  | `mcp_request_failed`, `extension_failed`, anything else | `tool_backend_failed` |
+
+  Example: `{code: "tool_denied", message: "mcp_tool_not_exposed (oauth_only): natural_language_to_nrql_query requires OAuth; …"}`.
+  The `mcp_request_failed` text no longer repeats the code inside the message, because the prefix
+  now carries it. Check-in source errors keep `data.code = source_*` (v0.1 contract), so `poll.ts`
+  and `errors.ts` are unchanged. The README error tables show what agents see.

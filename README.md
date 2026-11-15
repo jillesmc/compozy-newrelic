@@ -414,6 +414,17 @@ default, or `eu`).
 Without a bound key, the investigation and proxy tools return a `credential_absent` error that
 names the secrets command, and they make no network call.
 
+Tool errors reach agents as `<tool code>: <extension code>: <message>`. CompozyOS 0.7.0 keeps an
+extension's error text only under its own `tool_*` codes; the messages are those of the source
+[Errors](#errors) table:
+
+| Extension code | Tool code | Example |
+| --- | --- | --- |
+| `credential_absent`, `credential_expired`, `rate_limited` | `tool_unavailable` | `tool_unavailable: credential_absent: New Relic API key missing; run compozy extension secrets set newrelic --env NEW_RELIC_API_KEY` |
+| `params_invalid` | `tool_invalid_input` | `tool_invalid_input: params_invalid: New Relic rejected the query: <message>` |
+| `extension_failed` (timeout, tool budget of 25 s) | `tool_timed_out` | `tool_timed_out: extension_failed: New Relic request failed: tool budget exceeded` |
+| `extension_failed` (5xx, network) | `tool_backend_failed` | `tool_backend_failed: extension_failed: New Relic request failed: network error` |
+
 ## Plan matrix
 
 | Capability | Free plan | Paid plan | Credential |
@@ -472,16 +483,22 @@ disappear within 10 minutes, without an extension release.
 
 Refusals and errors:
 
-| Condition | Code | Message |
-| --- | --- | --- |
-| OAuth-only tool (seeded or learned) | `mcp_tool_not_exposed` | `natural_language_to_nrql_query requires OAuth; sign in with compozy mcp auth login newrelic or use another tool` (`newrelic-eu` for `eu`) |
-| Tool not marked read-only, or destructive | `mcp_tool_not_exposed` | `<tool> is not marked read-only by New Relic; the proxy does not call it` |
-| Unknown or removed tool | `mcp_tool_not_exposed` | `<tool> is not in the New Relic MCP catalog for region us` |
-| MCP unavailable for the key | `mcp_unavailable` | `New Relic MCP unavailable for this API key (403); use the ext__newrelic__* NerdGraph tools` |
-| Key not bound | `credential_absent` | Same text as the other tools; no network call. |
-| 401 | `credential_expired` | `New Relic rejected the API key; bind a User API key (NRAK-...)` |
-| 429 | `rate_limited` | `New Relic rate limit reached; retry later` |
-| 5xx, network error or timeout | `mcp_request_failed` | `mcp_request_failed: <status or error>` |
+Agents see `<tool code>: <extension code>[ (<reason>)]: <message>`. The tool code is the CompozyOS
+error class; the extension code and the message identify the case:
+
+| Condition | What the agent sees |
+| --- | --- |
+| OAuth-only tool (seeded or learned) | `tool_denied: mcp_tool_not_exposed (oauth_only): natural_language_to_nrql_query requires OAuth; sign in with compozy mcp auth login newrelic or use another tool` (`newrelic-eu` for `eu`) |
+| Tool not marked read-only, or destructive | `tool_denied: mcp_tool_not_exposed (not_read_only): <tool> is not marked read-only by New Relic; the proxy does not call it` |
+| Unknown or removed tool | `tool_denied: mcp_tool_not_exposed (unknown_tool): <tool> is not in the New Relic MCP catalog for region us` |
+| MCP unavailable for the key | `tool_unavailable: mcp_unavailable: New Relic MCP unavailable for this API key (403); use the ext__newrelic__* NerdGraph tools` |
+| Key not bound | `tool_unavailable: credential_absent: …` (same text as the other tools; no network call) |
+| 401 | `tool_unavailable: credential_expired: New Relic rejected the API key; bind a User API key (NRAK-...)` |
+| 429 | `tool_unavailable: rate_limited: New Relic rate limit reached; retry later` |
+| Bad `tool`, `arguments` (over 64 KiB) or `limit` | `tool_invalid_input: params_invalid: <what to fix>` |
+| Timeout | `tool_timed_out: mcp_request_failed: no answer within 60s` (10s for other requests) |
+| 5xx or network error | `tool_backend_failed: mcp_request_failed: <status or error>` |
+| Remote tool error | not an error: the result has `is_error: true` and `text` = the remote message |
 
 Refusals send no request, and an OAuth-only tool is refused even before the catalog loads. When
 `initialize` answers 403 or 404 the region is `unavailable` and is probed again after 10 minutes;

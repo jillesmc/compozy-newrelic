@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, test } from "node:test";
 
 import { CATALOG_TTL_MS, classify, OAUTH_ONLY_SEED, RETRY_MS } from "../src/mcp-catalog.ts";
 import { compactSchema, MAX_ARGUMENT_BYTES, MAX_MCP_TEXT_BYTES } from "../src/tools/mcp-proxy.ts";
+import { toolHandler, TOOLS } from "../src/tools/index.ts";
 import { FAKE_KEY, out, startProxyHarness, toolFailure } from "./helpers.ts";
 
 const READ = { readOnlyHint: true };
@@ -169,7 +170,7 @@ describe("MCP proxy (unit, fake MCP)", () => {
     await h.call("mcp_tools");
     assert.equal(h.fetches(), failed, "failed refreshes are retried at most once per minute");
     h.advance(CATALOG_TTL_MS - RETRY_MS + 1); // T + 2 TTL
-    assert.deepEqual(await toolFailure(h.call("mcp_tools")), { code: "mcp_request_failed", message: "mcp_request_failed: HTTP 500" });
+    assert.deepEqual(await toolFailure(h.call("mcp_tools")), { code: "mcp_request_failed", message: "HTTP 500" });
     assert.equal(h.mcp.state(h.nr.region), "unavailable");
     assert.deepEqual(h.lines, [`newrelic: region=${h.nr.region} mcp=available\n`, `newrelic: region=${h.nr.region} mcp=unavailable(500)\n`]);
     const unavailable = h.fetches();
@@ -190,7 +191,7 @@ describe("MCP proxy (unit, fake MCP)", () => {
 
   test("UT-171 state: unknown is re-probed at most once per minute", async () => {
     h.nr.mcpFake.status = 503;
-    assert.deepEqual(await toolFailure(h.call("mcp_tools")), { code: "mcp_request_failed", message: "mcp_request_failed: HTTP 503" });
+    assert.deepEqual(await toolFailure(h.call("mcp_tools")), { code: "mcp_request_failed", message: "HTTP 503" });
     assert.equal(h.mcp.state(h.nr.region), "unknown");
     const probed = h.fetches();
     h.advance(RETRY_MS - 1);
@@ -218,5 +219,47 @@ describe("MCP proxy (unit, fake MCP)", () => {
     for (const text of [JSON.stringify(echoed), JSON.stringify(remoteError), JSON.stringify(rpc), listed, h.lines.join("")]) {
       assert.ok(!text.includes(FAKE_KEY));
     }
+  });
+  test("UT-191 tool errors: data is a CompozyOS ToolError {code: tool_*, message: '<extension code>: ...'} (D-18)", async () => {
+    const data = async (promise: Promise<unknown>) => {
+      try {
+        await promise;
+      } catch (error) {
+        const rpc = error as { message: string; data: unknown };
+        assert.equal(rpc.message, (rpc.data as { message: string }).message);
+        return rpc.data;
+      }
+      throw new Error("expected a tool error");
+    };
+    // (a) an mcp_call oauth_only refusal (UT-150 tool error data)
+    assert.deepEqual(await data(h.call("mcp_call", { tool: "natural_language_to_nrql_query" })), {
+      code: "tool_denied",
+      message:
+        "mcp_tool_not_exposed (oauth_only): natural_language_to_nrql_query requires OAuth; sign in with compozy mcp auth login newrelic or use another tool",
+    });
+    // (c) a params error and a v0.1 tool without a key
+    assert.deepEqual(await data(h.call("mcp_tools", { limit: 61 })), {
+      code: "tool_invalid_input",
+      message: "params_invalid: limit must be an integer from 1 to 60",
+    });
+    const noKey = toolHandler(TOOLS.find(tool => tool.name === "nrql_query")!, { env: {} });
+    assert.deepEqual(await data(Promise.resolve(noKey({ input: { account_id: 1, nrql: "SELECT 1" } } as never))), {
+      code: "tool_unavailable",
+      message: "credential_absent: New Relic API key missing; run compozy extension secrets set newrelic --env NEW_RELIC_API_KEY",
+    });
+    // (d) mcp_request_failed on the probe, then (b) mcp_unavailable within the retry minute
+    h.nr.mcpFake.status = 502;
+    assert.deepEqual(await data(h.call("mcp_tools")), { code: "tool_backend_failed", message: "mcp_request_failed: HTTP 502" });
+    assert.deepEqual(await data(h.call("mcp_call", { tool: "list_recent_issues" })), {
+      code: "tool_unavailable",
+      message: "mcp_unavailable: New Relic MCP unavailable for this API key (502); use the ext__newrelic__* NerdGraph tools",
+    });
+    assert.equal(h.nr.mcpFake.requests.length, 1);
+    // a v0.1 network failure stays a backend failure with its message
+    const down = toolHandler(TOOLS.find(tool => tool.name === "nrql_query")!, { env: { NEW_RELIC_API_KEY: FAKE_KEY } });
+    assert.deepEqual(await data(Promise.resolve(down({ input: { account_id: 1, nrql: "SELECT 1", region: "loopback:9" } } as never))), {
+      code: "tool_backend_failed",
+      message: "extension_failed: New Relic request failed: network error",
+    });
   });
 });

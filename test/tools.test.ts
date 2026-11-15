@@ -10,7 +10,7 @@ import { alertIssuesTool, entitySearchQuery, listAccountsTool, searchEntitiesToo
 import { toolHandler, TOOLS } from "../src/tools/index.ts";
 import { errorGroupsTool, nrqlQueryTool, recentLogsTool } from "../src/tools/nrql-tools.ts";
 import type { NerdGraphTool, ToolContext } from "../src/tools/tool.ts";
-import { ACCOUNT, NOW } from "./helpers.ts";
+import { ACCOUNT, decodeToolError, NOW } from "./helpers.ts";
 
 interface Call {
   gql: string;
@@ -262,13 +262,17 @@ describe("investigation tools", () => {
     }) as unknown as typeof fetch;
     for (const tool of TOOLS.filter(t => t.name !== "doctor")) {
       const handler = toolHandler(tool, { env: {}, fetch: noFetch });
-      await assert.rejects(Promise.resolve(handler({ input: { account_id: ACCOUNT, nrql: "x", query: "x", where: "x" } } as never)), (error: RPCError<{ code: string }>) => {
-        assert.equal(error.data?.code, "credential_absent", tool.name);
-        assert.match(error.message, /compozy extension secrets set newrelic --env NEW_RELIC_API_KEY/);
+      await assert.rejects(Promise.resolve(handler({ input: { account_id: ACCOUNT, nrql: "x", query: "x", where: "x" } } as never)), (error: RPCError) => {
+        const decoded = decodeToolError(error);
+        assert.deepEqual([decoded.toolCode, decoded.code], ["tool_unavailable", "credential_absent"], tool.name);
+        assert.match(decoded.message, /compozy extension secrets set newrelic --env NEW_RELIC_API_KEY/);
         return true;
       });
     }
     const wrongKey = toolHandler(TOOLS[0]!, { env: { NEW_RELIC_API_KEY: "NRII-ingest" }, fetch: noFetch });
-    await assert.rejects(Promise.resolve(wrongKey({ input: { account_id: ACCOUNT, nrql: "x" } } as never)), { data: { code: "credential_expired" } });
+    await assert.rejects(Promise.resolve(wrongKey({ input: { account_id: ACCOUNT, nrql: "x" } } as never)), (error: RPCError) => {
+      assert.deepEqual([decodeToolError(error).toolCode, decodeToolError(error).code], ["tool_unavailable", "credential_expired"]);
+      return true;
+    });
   });
 });

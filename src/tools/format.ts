@@ -1,6 +1,5 @@
 import { RPCError, type JSONValue, type ToolResult } from "@compozy/extension-sdk";
 
-import { SourceError } from "../errors.ts";
 import { byteLength, truncateChars } from "../items.ts";
 
 /** Tool text and structured output bound (Business Rule 10, US-008.AC-2). */
@@ -9,13 +8,36 @@ const MAX_CELL_CHARS = 300;
 
 export type Row = Record<string, JSONValue>;
 
-/** Tool failure: JSON-RPC -32000 with `data.code` = the source code without `source_` (_dx.md Errors). */
+/** CompozyOS 0.7.0 keeps an extension tool error only with one of its own tool_* codes (Deviation D-18). */
+const TOOL_CODES: Record<string, string> = {
+  params_invalid: "tool_invalid_input",
+  mcp_tool_not_exposed: "tool_denied",
+  mcp_unavailable: "tool_unavailable",
+  credential_absent: "tool_unavailable",
+  credential_expired: "tool_unavailable",
+  rate_limited: "tool_unavailable",
+};
+const TIMEOUT = /no answer within|budget exceeded|timed out/i;
+const MAX_ERROR_CHARS = 1000;
+
+/**
+ * Tool failure: JSON-RPC -32000 whose `data` is a CompozyOS ToolError `{code, message}`. The message
+ * starts with the extension code (and the refusal reason) so the `_dx.md` texts stay recognizable:
+ * `tool_denied` + `mcp_tool_not_exposed (oauth_only): <text>`. Source errors keep `source_*` (poll.ts).
+ */
 export function toolError(error: unknown): RPCError {
-  if (error instanceof SourceError) {
-    return new RPCError(-32000, error.message, { code: String(error.data?.code ?? "").replace(/^source_/, "") });
+  let code = "extension_failed";
+  let reason: unknown;
+  let text = "New Relic tool failed unexpectedly";
+  if (error instanceof RPCError) {
+    const data = (error.data ?? {}) as { code?: unknown; reason?: unknown };
+    code = String(data.code ?? code).replace(/^source_/, "");
+    reason = data.reason;
+    text = error.message;
   }
-  if (error instanceof RPCError) return error; // already a tool error (MCP proxy codes)
-  return new RPCError(-32000, "New Relic tool failed unexpectedly", { code: "extension_failed" });
+  const toolCode = TOOL_CODES[code] ?? (TIMEOUT.test(text) ? "tool_timed_out" : "tool_backend_failed");
+  const message = truncateChars(`${code}${typeof reason === "string" ? ` (${reason})` : ""}: ${text}`, MAX_ERROR_CHARS);
+  return new RPCError(-32000, message, { code: toolCode, message });
 }
 
 /** Flattens a NerdGraph value into one compact cell (objects/arrays as JSON), ≤ 300 characters. */

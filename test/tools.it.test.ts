@@ -107,7 +107,11 @@ describe("tools and doctor against the fake NerdGraph and MCP", () => {
       Promise.resolve(
         toolHandler(tool, { env, budgetMs: 100 })({ input: { region: nr.region, account_id: ACCOUNT, nrql: "SELECT 1" } } as never)
       ),
-      { message: "New Relic request failed: tool budget exceeded", data: { code: "extension_failed" } }
+      // Deviation D-18: a CompozyOS ToolError; the budget is a timeout.
+      {
+        message: "extension_failed: New Relic request failed: tool budget exceeded",
+        data: { code: "tool_timed_out", message: "extension_failed: New Relic request failed: tool budget exceeded" },
+      }
     );
     assert.ok(performance.now() - started < 5_000);
   });

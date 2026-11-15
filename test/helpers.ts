@@ -138,13 +138,32 @@ export function out(result: unknown): Record<string, any> {
   return (result as { structured: Record<string, any> }).structured;
 }
 
-/** Awaits a rejected tool call and returns its `{code, reason?, message}`. */
+/** Tool error codes CompozyOS 0.7.0 keeps from an extension (internal/extension/tool_runtime.go). */
+export const ALLOWED_TOOL_CODES = ["tool_invalid_input", "tool_denied", "tool_unavailable", "tool_timed_out", "tool_backend_failed"];
+
+/**
+ * Decodes a tool error (Deviation D-18): `data` must be exactly a CompozyOS ToolError
+ * `{code: tool_*, message}` whose message is `<extension code>[ (<reason>)]: <text>`. Returns the
+ * extension code, reason and text, plus the tool_* code as `toolCode`.
+ */
+export function decodeToolError(error: unknown): { toolCode: string; code: string; reason?: string; message: string } {
+  const rpc = error as { message: string; data?: Record<string, unknown> };
+  const data = rpc.data ?? {};
+  assert.deepEqual(Object.keys(data).sort(), ["code", "message"]);
+  assert.ok(ALLOWED_TOOL_CODES.includes(String(data.code)), String(data.code));
+  assert.equal(data.message, rpc.message);
+  const match = /^(\w+)(?: \((\w+)\))?: ([\s\S]+)$/.exec(String(data.message));
+  assert.ok(match, String(data.message));
+  return { toolCode: String(data.code), code: match[1]!, ...(match[2] ? { reason: match[2] } : {}), message: match[3]! };
+}
+
+/** Awaits a rejected tool call and returns its decoded `{code, reason?, message}` (no toolCode). */
 export async function toolFailure(promise: Promise<unknown>): Promise<{ code: string; reason?: string; message: string }> {
   try {
     await promise;
   } catch (error) {
-    const rpc = error as { message: string; data?: { code: string; reason?: string } };
-    return { code: rpc.data?.code ?? "", ...(rpc.data?.reason ? { reason: rpc.data.reason } : {}), message: rpc.message };
+    const { toolCode: _toolCode, ...decoded } = decodeToolError(error);
+    return decoded;
   }
   throw new Error("expected a tool error");
 }

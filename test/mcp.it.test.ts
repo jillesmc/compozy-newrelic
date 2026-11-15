@@ -62,7 +62,7 @@ describe("MCP proxy against the fake Streamable HTTP MCP", () => {
     };
     assert.equal((await failure(401)).code, "credential_expired");
     assert.equal((await failure(429)).code, "rate_limited");
-    assert.deepEqual(await failure(502), { code: "mcp_request_failed", message: "mcp_request_failed: HTTP 502" });
+    assert.deepEqual(await failure(502), { code: "mcp_request_failed", message: "HTTP 502" });
     h.nr.mcpFake.status = 0;
     const client = createMcpClient(h.nr.region, FAKE_KEY, { callTimeoutMs: 50 });
     await assert.rejects(client.callTool("analyze_transactions", {}, new AbortController().signal), (error: McpError) => {
@@ -85,7 +85,7 @@ describe("MCP proxy against the fake Streamable HTTP MCP", () => {
     h.nr.mcpFake.expireCalls = 2;
     assert.deepEqual(await toolFailure(h.call("mcp_call", { tool: "chart_report" })), {
       code: "mcp_request_failed",
-      message: "mcp_request_failed: session expired twice",
+      message: "session expired twice",
     });
     assert.equal(methods().filter(method => method === "initialize").length, 3);
   });

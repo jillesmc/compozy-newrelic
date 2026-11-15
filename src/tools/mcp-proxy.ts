@@ -40,7 +40,7 @@ function failure(error: unknown): unknown {
     case "rate_limited":
       return mcpToolError("rate_limited", error.message);
     default:
-      return mcpToolError("mcp_request_failed", `mcp_request_failed: ${error.message}`);
+      return mcpToolError("mcp_request_failed", error.message);
   }
 }
 

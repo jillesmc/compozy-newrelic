@@ -113,15 +113,31 @@ operator whether feature 4 is worth enabling.
     - The API key never appears in items, tool results, errors, logs, or state.
 11. **Tool honesty.** The extension registers only tools that work with a User API key on a free
     plan. OAuth-only or paid-only capability reaches agents only through the OAuth MCP servers.
+12. **Deterministic, model-free sources** (operator addition, 2026-11-15). The four check-in sources
+    are the operator's zero-token gate for always-on agents, so each poll is a deterministic function
+    of (params, committed state, `request.now`, NerdGraph responses):
+    1. Sources never call an LLM, any New Relic AI feature (for example natural-language-to-NRQL), or
+       any MCP server or tool; they only send fixed NRQL/GraphQL built from params. The investigation
+       tools are separate and are used only by the agent after it is woken.
+    2. Identical inputs produce byte-identical results: stable ordering with rank ties broken by key
+       ascending; NerdGraph row order does not affect output (sort before processing); fixed number
+       formatting and UTC ISO timestamps in titles, summaries, and attributes; no wall-clock reads (use
+       `request.now`), no randomness, no locale-dependent formatting.
+    3. Volatile values never create items by themselves: only key transitions (inactive → active) emit
+       items; a poll with nothing new returns an empty item list so the daemon skips the model.
+    4. State is canonical: `active` keys sorted and de-duplicated, stable JSON key order; when the
+       active set is unchanged the encoded state is byte-identical to the committed one.
 
 ## User Experience
 
 - **First use**:
   1. Install.
   2. Bind `NEW_RELIC_API_KEY` and restart the extension.
-  3. Run `doctor`.
-  4. Add one or more sources on the agent's Heartbeat page, with **Try it now** showing a quiet baseline.
-  5. Optionally `compozy mcp auth login newrelic` when the doctor says the MCP is available.
+  3. Grant the tool source: `[tools.policy] trusted_sources = ["extension:newrelic"]`, then restart
+     the daemon (Deviation D-10).
+  4. Run `doctor`.
+  5. Add one or more sources on the agent's Heartbeat page, with **Try it now** showing a quiet baseline.
+  6. Optionally `compozy mcp auth login newrelic` when the doctor says the MCP is available.
 - **Regular use**: quiet checks show "All quiet". A breach or new alert wakes the agent with one item.
   The agent investigates with `ext__newrelic__*` tools, plus the MCP tools when signed in.
 - **Discoverability**: the GitHub topic `compozy-extension`, the README (golden path, NRQL gallery,
@@ -156,8 +172,10 @@ operator whether feature 4 is worth enabling.
 - The exact New Relic OAuth client contract for third-party MCP clients: a pre-configured client id,
   or whether dynamic registration is accepted. S4 verifies this against the live docs and the
   CompozyOS OAuth flow. If neither works, S4 ships the servers documented as "unavailable in
-  CompozyOS", and the doctor says so.
+  CompozyOS", and the doctor says so. **Resolved by D-S4-a**: pre-registered public client; the
+  authorize step is verified, and token exchange is left to E2E-004.
 - How the MCP answers a free or disabled account (403 at login or at `tools/list`). S4 records it.
+  **Still open (D-S4-a, unverified assumptions)**: needs an operator-run E2E-004 on such an account.
 
 ---
 
@@ -442,3 +460,180 @@ No CompozyOS config keys added. The existing `[agents.heartbeat.sources]` `max_i
 
 - [ADR-001: Transition semantics on active-signal sets](adrs/adr-001.md)
 - [ADR-002: Investigation layer — NerdGraph tools plus OAuth-only official MCP](adrs/adr-002.md)
+
+## Deviations
+
+- **D-1 (2026-11-14, conductor, recorded before S1 coding): the loopback region is always compiled in
+  and undocumented.** CompozyOS 0.7.0 passes extensions only allowlisted env plus declared secrets
+  (compozy-jira D-1), so a `NEW_RELIC_TEST_LOOPBACK=1` runtime flag never reaches the extension, and a
+  test-only build would make E2E-005 (published artifact against the fakes) impossible. Change: every
+  `region` parameter (sources, tools, `doctor --region`) accepts `us`, `eu`, or `loopback:<port>`
+  (port 1–65535). A loopback region sends NerdGraph requests to `http://127.0.0.1:<port>/graphql`
+  and the MCP probe to `http://127.0.0.1:<port>/mcp/`; it is never used by default, never appears in
+  the README golden path or examples, and is mentioned only as a local testing aid. No other host is
+  accepted. The API key still travels only in the request header.
+- **D-2 (2026-11-15, S1, recorded before coding): item keys follow the daemon key pattern exactly.**
+  CompozyOS 0.7.0 validates item keys with `^[A-Za-z0-9][A-Za-z0-9._:/#@+-]{0,199}$`
+  (`internal/heartbeat/source/source.go:85`): the first character must be alphanumeric, so the
+  Business Rule 3 no-facet key `_` (and any raw facet value starting with `_`, `-`, `.` and so on)
+  would make the daemon reject the whole result. Change: (a) the no-facet key for `newrelic/nrql` and
+  `newrelic/logs` is `all` instead of `_`; (b) sanitization replaces every character outside
+  `[A-Za-z0-9._:/#@+-]` with `-` and prefixes `x` when the first character is not alphanumeric; when
+  this changes the raw key, `#` plus 8 hex of SHA-256 of the raw key is appended so distinct raw
+  values never collide; (c) a key still over 200 bytes keeps a 180-byte prefix plus `#` and 12 hex of
+  SHA-256 of the raw key (unchanged rule). Keys that are already valid are kept verbatim.
+- **D-3 (2026-11-15, S1, recorded before coding): `Region` type includes the D-1 loopback form.**
+  `src/nerdgraph.ts` declares `type Region = "us" | "eu" | \`loopback:${number}\`` (the Core Interfaces
+  block shows only `"us" | "eu"`), and the `region` params schema is the string pattern
+  `^(us|eu|loopback:[0-9]{1,5})$` instead of an enum, because the daemon validates params against the
+  schema before the extension sees them. The port range 1–65535 is checked in code.
+- **D-4 (alias D-S2-a; 2026-11-15, S2, recorded before coding): `newrelic/issues` follows the publicly documented
+  `aiIssues` schema, not the Queries guess.** Source: `_research-public-docs.md` (New Relic docs
+  "NerdGraph issues API"). `FilterIssues` has only `entityGuids`, `entityTypes`, `ids`, `priority`
+  (`[String!]`) and `states`; `Issue` has no `conditionName` or `policyName`, and `title` is
+  `[String!]!`. Changes:
+  1. Query: `query($id:Int!){actor{account(id:$id){aiIssues{issues(filter:{states:[ACTIVATED,CREATED],priority:[…],entityGuids:[…]}[,cursor:"…"]){issues{issueId title priority state entityNames activatedAt createdAt} nextCursor}}}}}`.
+     The filter and cursor are inlined as GraphQL literals (strings encoded with `JSON.stringify`,
+     entity GUIDs validated against `^[A-Za-z0-9+/=_-]{1,200}$`) because the input type names are not
+     documented; only `$id` is a variable. UT-043 therefore asserts the filter in the query text, not
+     in the variables. The first page has no cursor; later pages pass `nextCursor` until it is empty
+     or null (at most 20 pages, else `source_params_invalid` asking to narrow the filters).
+  2. `policy_ids` is **dropped** from `newrelic/issues` (`_dx.md` updated): no documented Issue field
+     or issue filter carries a policy, and client-side matching is impossible. Operators scope with
+     `entity_guids` (and `priorities`). Policy scoping via `aiIssues { incidents(filter: { policyIds }) }`
+     is a follow-up once the incident schema is verified. US-002 EC-1 is satisfied for `entity_guids`.
+  3. Items carry `title` (the title list joined with `; `), `priority`, `state`, `entityNames`
+     (joined with `, `) and `activatedAt` (or `createdAt`) as UTC ISO; US-002 AC-1 "condition" is not
+     available on Issue and is omitted. The item link is the region's New Relic UI root (no documented
+     issue URL field).
+  4. Activeness stays Business Rule 2 and is also checked client-side (state `ACTIVATED`/`CREATED`
+     and priority in `priorities`), so a server that ignores a filter cannot widen the set.
+  5. `timeWindow` is omitted (its subfield names are not documented), so New Relic's default window
+     of the last 24 hours applies. Limitation: an issue that leaves that default window while still
+     open drops out of the active set silently; if it later re-enters the window it is reported again.
+  6. No `nerd-graph-unsafe-experimental-opt-in` header is sent (not in the public docs).
+
+  Unverified assumptions (operator-run E2E-003): `aiIssues.issues` argument names `filter` and
+  `cursor` (and that `cursor` accepts a string literal); the filter keys `states`, `priority`,
+  `entityGuids` and the enum literals `ACTIVATED`/`CREATED`; the default 24 h window and what it
+  filters on; Issue field names `issueId`, `title`, `priority`, `state`, `entityNames`,
+  `activatedAt`, `createdAt`; `nextCursor` being null or empty on the last page; `activatedAt` and
+  `createdAt` arriving as epoch milliseconds (number or numeric string; both are parsed).
+- **D-5 (alias D-S2-b; 2026-11-15, S2, recorded before coding): errors and logs item details.**
+  1. The `newrelic/errors` summary does not carry the `_dx.md` example's "first in window 14:02 UTC":
+     the specified query (`SELECT count(*) … FACET appName, error.class, error.message`) returns no
+     timestamp. The summary ends with `checked <request.now UTC ISO>` like `newrelic/nrql`.
+  2. Event types are de-duplicated and sorted before building `FROM` (stable NRQL and fingerprint).
+     Unverified (operator-run E2E-003): `JavaScriptError` rows expose `error.class`/`error.message`;
+     if they only carry `errorClass`/`errorMessage`, their class and message read as `null`.
+  3. `newrelic/logs` without `facet` titles its item `all logs: …` with key `all` (D-2).
+- **D-6 (alias D-S3-a; 2026-11-15, S3, recorded before coding): `alert_issues` follows the public `aiIssues`
+  schema.** The `Issue` type has no `conditionName`/`policyName` and its `title` is a list
+  (`_research-public-docs.md`), and the `timeWindow` input's field names are undocumented. Change:
+  results are `{id, title, priority, state, entities, opened_at, url}` with no `condition`; `title` is
+  the incident titles joined with `; `; `state` is `open` (default, `ACTIVATED`/`CREATED`), `closed`
+  (`CLOSED`/`DEACTIVATED`) or `all`; `since` (a `5m`–`24h` duration) filters client-side on
+  `activatedAt`/`createdAt`, inside NerdGraph's default 24-hour issue window (no `timeWindow` is sent);
+  `url` is the region's New Relic UI base (same as `newrelic/nrql` items), since no issue deep-link
+  format is verified.
+- **D-7 (alias D-S3-b; 2026-11-15, S3, recorded before coding): doctor details `_dx.md` leaves open.** (a) Without
+  a bound key the doctor still prints its report (`NerdGraph: failed (<missing-key message>)`,
+  `MCP: unknown (no API key)`) and makes no network call, instead of failing as a tool error; (b) the
+  startup line values are `nerdgraph=ok|<error code>` and `mcp=available|unavailable:<status>|unknown`
+  (no free text, so no key can appear); (c) the probe runs once from the SDK `onReady` callback, so it
+  never runs in `__describe` mode or blocks startup; (d) MCP `initialize` sends
+  `Accept: application/json, text/event-stream` and accepts a JSON or SSE answer.
+- **D-8 (alias D-S4-a; 2026-11-15, S4): OAuth MCP servers use the pre-registered public client and are added to
+  the manifest by a packaging step, not the SDK definition.**
+  - **Delivery (deviates from Data Models "Manifest additions (via SDK definition)").** CompozyOS 0.7.0
+    cannot emit MCP servers for an SDK extension: the describe contract `DescribeResources` has no
+    MCP field (`internal/extension/contract/describe.go:70-77`), `decodeDescribePayload` rejects
+    unknown fields (`internal/extension/build_describe.go:19-22`), `manifestFromDescribe` copies no
+    MCP servers (`build_describe.go:57-64`), and TS SDK 0.7.0 `describe()` drops
+    `definition.resources.mcp_servers` (its type is stdio-only: `sdk/typescript/src/types.ts:50-54`).
+    Change: `src/mcp-servers.ts` holds the declaration (`MCP_SERVERS`, rendered by
+    `mcpServersToml()`). `bun run package` (`scripts/package.ts`) runs `compozy extension build . -o
+    json`, copies the generation to `dist/release`, appends the `[resources.mcp_servers.*]` tables to
+    its `extension.toml`, and runs `compozy extension validate dist/release`. Local installs, E2E,
+    and `compozy extension publish` (S6) must use `dist/release`. A bare `dist/gen-*` has no MCP
+    servers. `publish` tars any directory that `LoadManifest` accepts (`internal/extension/publish.go:54-70`),
+    and the daemon never re-checks the manifest against describe. `prepareBuildOutput` deletes
+    `dist/release` on every build (`build_generation.go:19-34`), so it never leaks into a generation.
+  - **Auth fields** (both servers; URLs `https://mcp.newrelic.com/mcp/` and
+    `https://mcp.eu.newrelic.com/mcp/`, `transport = "http"`, `default_scope = "workspace"`, no
+    headers): `method = "oauth"`, `registration = "pre_registered"`,
+    `issuer_url = "https://oauth2.service.newrelic.com"`, `client_id = "pUWGgnjsQ0bydqCbavTPpw=="`,
+    `scopes = ["observability:read", "offline_access"]`.
+  - **Why pre-registered, not `dynamic`.** CompozyOS maps `dynamic` to `auto`, which tries CIMD
+    and then DCR (`internal/mcp/auth/sdk_adapter.go:281-322`). New Relic's DCR returns the same
+    fixed client id whatever it is sent (https://github.com/newrelic/mcp-server/issues/7), so DCR only
+    adds a network dependency and a persisted registration. `pre_registered` with no secret
+    authenticates at the token endpoint as `none` (`internal/mcp/auth/client_auth.go:33-46`), and New
+    Relic advertises `token_endpoint_auth_methods_supported: ["none", ...]`. `client_id` requires
+    `registration = "pre_registered"` (`internal/config/mcp_server_validation.go:137-170`).
+  - **Why this `issuer_url`.** With `pre_registered`, CompozyOS fetches AS metadata directly from
+    `issuer_url` and requires its `issuer` to match (`internal/mcp/auth/pre_registered.go:52-73`,
+    `issuersEqual` trims a trailing `/`, `types.go:474`). Two endpoints fit:
+    `https://oauth2.service.newrelic.com/.well-known/oauth-authorization-server` (issuer
+    `https://oauth2.service.newrelic.com`) and `https://mcp.newrelic.com/.well-known/oauth-authorization-server`
+    (issuer `https://mcp.newrelic.com`, EU `https://mcp.eu.newrelic.com`). Both point at the same
+    `oauth2.service.newrelic.com/oauth2/{auth,token}` endpoints and both advertise S256. The chosen
+    one is the server that RFC 9728 protected-resource metadata advertises
+    (`https://mcp[.eu].newrelic.com/.well-known/oauth-protected-resource` →
+    `authorization_servers: ["https://oauth2.service.newrelic.com"]`), and it is region-independent.
+    The authorization request also carries `resource=<server URL>` and the space-joined scopes
+    (`internal/mcp/auth/service.go:133-159`).
+  - **Redirect URI.** CompozyOS's automatic callback is `mcp.oauth.redirect_uri`, default
+    `http://127.0.0.1:2123/api/mcp/oauth/callback` (`internal/config/defaults.go:56`), and it must be
+    loopback (`internal/api/core/settings_mcp_auth.go:242-262`). Probed unauthenticated on 2026-11-15
+    with `GET https://oauth2.service.newrelic.com/oauth2/auth` (this client_id, S256 challenge,
+    `scope=observability:read offline_access`, `resource=https://mcp[.eu].newrelic.com/mcp/`, no
+    login, redirects not followed):
+    - Passed through to the `login.newrelic.com/?login_challenge=…` login page:
+      `http://127.0.0.1:2123/api/mcp/oauth/callback` (US and EU resource),
+      `http://localhost:2123/api/mcp/oauth/callback`, `http://127.0.0.1:9999/api/mcp/oauth/callback`,
+      and `http://127.0.0.1:2123/callback`.
+    - Rejected with `redirect_uri ... does not match any of the OAuth 2.0 Client's pre-registered
+      redirect urls`: `http://127.0.0.1:2123/other` and `https://evil.example.com/cb`.
+
+    So loopback works on any port when the path is allowlisted, and the CompozyOS default path is on
+    the allowlist. An operator who changed `mcp.oauth.redirect_uri` to another path will be
+    rejected.
+  - **Validation.** `compozy extension validate dist/release` returns valid. A copy with an invalid
+    `registration` value is reported invalid on `resources.mcp_servers.newrelic.auth`, which shows
+    that validation reads these tables.
+  - **Unverified assumptions (operator-run E2E-004).**
+    - Token exchange and refresh: we assume the code exchange with `token_endpoint_auth_method=none`,
+      the issued `refresh_token` (`offline_access`; New Relic docs also list `offline`), and the use of
+      the bearer token at `mcp[.eu].newrelic.com/mcp/` all succeed. Access tokens last 5 minutes and
+      re-login is needed after 24 h, per New Relic docs.
+    - Free or disabled account: we assume it fails at login or token exchange (the auth server
+      refuses), or at `initialize`/`tools/list` with 401/403. In either case CompozyOS exposes no MCP
+      tools. The real failure point is not recorded yet.
+    - The redirect allowlist was observed from outside and is not documented by New Relic.
+- **D-9 (alias D-S2-c; 2026-11-15, S2 repair, recorded before coding): errors and logs query `LIMIT 501`.** The
+  Queries section shows `LIMIT 500`, which makes truncation undetectable and breaks Business Rule 7
+  ("never truncates silently"). Change: the `newrelic/errors` and `newrelic/logs` NRQL ends with
+  `LIMIT 501`; 501 raw rows (for errors, before regrouping by normalized message) fail with
+  `source_params_invalid` and a narrow-the-filter message; exactly 500 rows are accepted. IT-003
+  asserts `LIMIT 501`.
+- **D-10 (2026-11-15, conductor via E2E-002, recorded by S5 before the README): first use grants the
+  extension's tool source.** On a default daemon every `ext__newrelic__*` tool, including
+  `compozy extension exec newrelic --cmd doctor`, is denied with `tool_denied` / `source_disabled`,
+  because `tools.policy.external_default` defaults to `disabled` (CompozyOS
+  `internal/tools/policy.go` `evaluateSourcePolicy`; `docs/configuration/config-toml.mdx`
+  `[tools.policy]`). Sources are unaffected: check-ins do not go through the tool policy. Change: the
+  First-use flow (User Experience above, `_dx.md` Golden Path, README) gains step 3 "grant the tool
+  source" between binding the secret and running the doctor: add
+  `[tools.policy] trusted_sources = ["extension:newrelic"]` to the user `config.toml` (path from
+  `compozy config path --scope user`) and restart the daemon (`compozy daemon stop`, then
+  `compozy daemon start`). Every tool is read-only, so a trusted read-only source is allowed
+  (`isTrustedReadOnlySource`). The `compozy config set` writer cannot do this: `tools.policy.*` is a
+  trust root (`configPathIsTrustRoot`, `internal/config/tool_surface_security.go`) and has no
+  `config set` value kind, so the operator edits the file. The restart is the safe instruction because
+  only workspace-scoped policy resolution re-reads config files; the daemon's own snapshot is from
+  boot. Alternative: an explicit grant in an agent definition's `tools` list, which narrows that
+  agent to the listed tools. The official MCP is a separate grant: a completed
+  `compozy mcp auth login newrelic --scope user --owner extension:newrelic` makes its tools callable
+  even with `external_default = "disabled"` (`docs/extensions/install.mdx`).
+

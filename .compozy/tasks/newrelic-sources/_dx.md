@@ -14,9 +14,19 @@ compozy extension install github:jillesmc/compozy-newrelic@v0.1.0 --allow-unveri
 compozy extension secrets set newrelic --env NEW_RELIC_API_KEY
 compozy extension disable newrelic && compozy extension enable newrelic
 
-# 3. Check what this account can use
+# 3. Grant the extension's read-only tools (Deviation D-10): add to the user config.toml
+#    (path: compozy config path --scope user), then restart the daemon
+#      [tools.policy]
+#      trusted_sources = ["extension:newrelic"]
+compozy daemon stop && compozy daemon start
+
+# 4. Check what this account can use
 compozy extension exec newrelic --cmd doctor --region us
 ```
+
+Without step 3 every `ext__newrelic__*` tool, the doctor included, fails with `tool_denied`
+(`source_disabled`), because `tools.policy.external_default` defaults to `disabled`. Sources work
+without it. `compozy config set` cannot write `tools.policy` (trust root), so edit the file.
 
 ```text
 NerdGraph: ok (region us, 21 accounts visible)
@@ -111,8 +121,7 @@ Parameters (all kinds accept `account_id` (required, integer), `region` (`us` | 
 | | `condition` | `above` \| `below` | `above` | Breach direction. |
 | | `threshold` | number | — (required) | Breach boundary (strict `>` / `<`). |
 | `newrelic/issues` | `priorities` | string[] | `[CRITICAL, HIGH]` | Issue priorities that count. |
-| | `entity_guids` | string[] | none | Only issues on these entities. |
-| | `policy_ids` | string[] | none | Only issues from these alert policies. |
+| | `entity_guids` | string[] | none | Only issues on these entities. (No `policy_ids`: issues carry no policy; Deviation D-S2-a.) |
 | `newrelic/errors` | `where` | string | none | NRQL `WHERE` body (no `WHERE` keyword). |
 | | `event_types` | string[] | `[TransactionError]` | Also `JavaScriptError`. |
 | | `window` | duration | `30m` | Counting window (`m`/`h`, 5m–24h). |
@@ -138,7 +147,7 @@ Tools (read-only, model-visible, compact; all take `account_id` where relevant a
 | `ext__newrelic__nrql_query` | `nrql`, `account_id`, `region?` | Up to 50 rows as a compact table, plus `truncated`. |
 | `ext__newrelic__list_accounts` | `region?` | `[{id, name}]`. |
 | `ext__newrelic__search_entities` | `query` (name or NerdGraph entity search), `region?` | Up to 25 `{guid, name, type, domain, alert_severity}`. |
-| `ext__newrelic__alert_issues` | `account_id`, `state?` (`open` default), `priorities?`, `since?` | Up to 25 issues `{id, title, priority, state, entities, condition, opened_at, url}`. |
+| `ext__newrelic__alert_issues` | `account_id`, `state?` (`open` default), `priorities?`, `since?` | Up to 25 issues `{id, title, priority, state, entities, opened_at, url}` (no condition: Deviation D-6). |
 | `ext__newrelic__error_groups` | `account_id`, `where?`, `window?` | Up to 25 `{app, class, message (≤160), count, last_seen}`. |
 | `ext__newrelic__recent_logs` | `account_id`, `where`, `window?`, `limit?` (≤50) | Lines `{timestamp, service, level, message (≤300)}`. |
 | `ext__newrelic__doctor` | `region?` | The probe report (operator command; agents should not call it). |

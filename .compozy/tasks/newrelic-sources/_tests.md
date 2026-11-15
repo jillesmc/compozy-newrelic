@@ -36,6 +36,7 @@ Canonical test contract. Companion to `_spec.md`; derived from `_user_stories.md
 | US-009.* | OAuth MCP gating | — | — | E2E-004 |
 | US-010.* | Doctor command and startup line | UT-100–UT-102 | IT-013 | E2E-002 |
 | US-011.* | Install a release | UT-110 (manifest) | — | E2E-005 |
+| BR-12 | Deterministic, model-free sources | UT-120–UT-123 | — | — |
 
 ## Unit Tests
 
@@ -99,6 +100,13 @@ Canonical test contract. Companion to `_spec.md`; derived from `_user_stories.md
 - **UT-100** (happy): NerdGraph ok with 21 accounts and MCP 200 with tools capability → `MCP: available` plus the login hint.
 - **UT-101** (error): MCP 403 → `MCP: unavailable (403 …)` plus the "keep ext tools" hint.
 - **UT-102** (error): MCP network error → `MCP: unknown (<error>)`; the doctor still exits successfully.
+
+### determinism (Spec: Business Rule 12; owned by S1, S2 reuses UT-121 for its kinds)
+
+- **UT-120** (idempotency): the same request twice → deep-equal and byte-equal JSON results.
+- **UT-121** (determinism): shuffled NerdGraph row order → identical result (S1: nrql; S2: errors, logs, issues).
+- **UT-122** (state): unchanged active set → encoded state byte-identical to the committed state, and zero items.
+- **UT-123** (static): no code path under `src/sources` or `src/engine` imports or calls the MCP client, the doctor MCP probe, or any AI endpoint.
 
 ### manifest
 

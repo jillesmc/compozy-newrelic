@@ -1,4 +1,5 @@
-import { paramsError, sourceError } from "../errors.ts";
+import { paramsError } from "../errors.ts";
+import { epochMs, fetchIssuePages } from "../issue-query.ts";
 import { parseWindow } from "../params.ts";
 import { boundedResult, cell, renderLines, type Row } from "./format.ts";
 import { ACCOUNT_PROPERTIES, accountId, REGION_PROPERTY, type NerdGraphTool } from "./tool.ts";
@@ -68,24 +69,6 @@ export const searchEntitiesTool: NerdGraphTool = {
   },
 };
 
-/** Public `aiIssues` schema (Deviation D-S3-a): enum filters are inlined, the cursor is a variable. */
-export function issuesQuery(states: string[] | null, priorities: string[]): string {
-  const filter = [
-    states ? `states:[${states.join(",")}]` : "",
-    priorities.length < PRIORITIES.length ? `priority:[${priorities.map(p => JSON.stringify(p)).join(",")}]` : "",
-  ].filter(Boolean).join(",");
-  return (
-    "query($id:Int!,$cursor:String){actor{account(id:$id){aiIssues{" +
-    `issues(${filter ? `filter:{${filter}},` : ""}cursor:$cursor){issues{issueId title priority state entityNames activatedAt createdAt} nextCursor}` +
-    "}}}}"
-  );
-}
-
-function epochMs(raw: unknown): number {
-  const value = typeof raw === "string" ? Number(raw) : raw;
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
 export const alertIssuesTool: NerdGraphTool = {
   name: "alert_issues",
   description:
@@ -111,22 +94,12 @@ export const alertIssuesTool: NerdGraphTool = {
       throw paramsError(`priorities must list values from ${PRIORITIES.join(", ")}`);
     }
     const sinceMs = input.since === undefined ? 0 : ctx.now().getTime() - parseWindow(input.since, "24h") * 60_000;
-    const gql = issuesQuery(states, [...new Set(priorities as string[])].sort());
-    type Page = { issues?: unknown[]; nextCursor?: string | null };
-    type Data = { actor?: { account?: { aiIssues?: { issues?: Page } } | null } };
-    const issues: Record<string, unknown>[] = [];
-    let cursor: string | null = null;
-    for (let page = 0; page < MAX_ISSUE_PAGES; page++) {
-      const data: Data = await ctx.client.query<Data>(gql, { id, cursor }, ctx.signal);
-      const account = data?.actor?.account;
-      if (!account) throw sourceError("source_params_invalid", `this API key cannot read account ${id}`);
-      const result: Page = account.aiIssues?.issues ?? {};
-      issues.push(...(result.issues ?? []).map(raw => (raw ?? {}) as Record<string, unknown>));
-      cursor = result.nextCursor || null;
-      if (!cursor) break;
-    }
+    const wanted = [...new Set(priorities as string[])].sort();
+    // One shared aiIssues query shape (D-4/D-6); all priorities means no priority filter.
+    const filter = { states, priorities: wanted.length < PRIORITIES.length ? wanted : null, entityGuids: [] };
+    const { issues, more } = await fetchIssuePages(ctx.client, id, filter, ctx.signal, MAX_ISSUE_PAGES);
     const rank = (issue: Record<string, unknown>) => PRIORITIES.indexOf(String(issue.priority));
-    const opened = (issue: Record<string, unknown>) => epochMs(issue.activatedAt) || epochMs(issue.createdAt);
+    const opened = (issue: Record<string, unknown>) => epochMs(issue.activatedAt) ?? epochMs(issue.createdAt) ?? 0;
     const rows: Row[] = issues
       .filter(issue => opened(issue) >= sinceMs)
       .sort((a, b) => rank(a) - rank(b) || opened(b) - opened(a))
@@ -143,7 +116,7 @@ export const alertIssuesTool: NerdGraphTool = {
     return boundedResult({
       rows,
       cap: MAX_ISSUES,
-      more: cursor !== null,
+      more,
       render: shown => renderLines(shown, columns) + (ctx.endpoints.web && shown.length ? `\nurl: ${ctx.endpoints.web}` : ""),
     });
   },

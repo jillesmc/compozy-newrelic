@@ -1,12 +1,14 @@
 import type { HeartbeatSourceRequest, HeartbeatSourceResult, JSONValue } from "@compozy/extension-sdk";
 
 import { fingerprint, sortRows, transition, type Signal } from "../engine.ts";
-import { paramsError, sourceError } from "../errors.ts";
+import { paramsError } from "../errors.ts";
+import { epochMs, fetchIssuePages, issuesQuery as sharedIssuesQuery, type IssueFilter } from "../issue-query.ts";
 import { redactDeep, shapeItem } from "../items.ts";
-import { accountError } from "../nerdgraph.ts";
 import { sanitizeKey } from "../normalize.ts";
 import { asObject, COMMON_PROPERTIES, parseCommon, stringListParam } from "../params.ts";
 import type { ParsedParams, SourceContext, SourceDefinition } from "./source.ts";
+
+export { epochMs };
 
 /** Lowest to highest; the index is the ordering weight (Business Rule 6). */
 export const PRIORITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
@@ -59,55 +61,22 @@ export function parseIssuesParams(raw: unknown): IssuesParams {
   return { ...common, priorities, entityGuids, fingerprint: fp };
 }
 
-const list = (values: string[]) => `[${values.map(value => JSON.stringify(value)).join(",")}]`;
-
-/**
- * The `aiIssues` query (Deviation D-S2-a): filter and cursor are GraphQL literals because the input
- * type names are not publicly documented; strings are JSON-encoded, a subset of GraphQL escaping.
- */
+/** The shared `aiIssues` query (D-4) for open issues with these priorities and entities. */
 export function issuesQuery(params: IssuesParams, cursor: string | null): string {
-  const filter = [
-    `states:[${OPEN_STATES.join(",")}]`,
-    `priority:${list(params.priorities)}`,
-    ...(params.entityGuids.length ? [`entityGuids:${list(params.entityGuids)}`] : []),
-  ].join(",");
-  const args = `filter:{${filter}}${cursor ? `,cursor:${JSON.stringify(cursor)}` : ""}`;
-  return (
-    "query($id:Int!){actor{account(id:$id){aiIssues{" +
-    `issues(${args}){issues{issueId title priority state entityNames activatedAt createdAt} nextCursor}` +
-    "}}}}"
-  );
+  return sharedIssuesQuery(issueFilter(params), cursor);
 }
 
-type IssuesData = {
-  actor?: {
-    account?: { aiIssues?: { issues?: { issues?: unknown; nextCursor?: unknown } | null } | null } | null;
-  };
-};
+function issueFilter(params: IssuesParams): IssueFilter {
+  return { states: OPEN_STATES, priorities: params.priorities, entityGuids: params.entityGuids };
+}
 
 /** Every page of open issues, following `nextCursor` until it is empty (IT-002). */
 export async function fetchIssues(params: IssuesParams, context: SourceContext): Promise<Record<string, unknown>[]> {
-  const issues: Record<string, unknown>[] = [];
-  let cursor: string | null = null;
-  for (let page = 0; page < MAX_ISSUE_PAGES; page++) {
-    const query = issuesQuery(params, cursor);
-    const data = await context.client.query<IssuesData>(query, { id: params.accountId }, context.signal);
-    const account = data?.actor?.account;
-    if (!account) throw accountError(params.accountId);
-    const result = account.aiIssues?.issues;
-    if (!result || !Array.isArray(result.issues)) throw sourceError("source_extension_failed", "New Relic request failed: unexpected response");
-    issues.push(...result.issues.filter((row): row is Record<string, unknown> => !!row && typeof row === "object"));
-    const next = typeof result.nextCursor === "string" && result.nextCursor !== "" ? result.nextCursor : null;
-    if (next === null) return issues;
-    cursor = next;
-  }
-  throw paramsError(PAGES_MESSAGE);
-}
-
-/** EpochMilliseconds, which NerdGraph may serialize as a number or a numeric string. */
-export function epochMs(raw: unknown): number | null {
-  const ms = typeof raw === "number" ? raw : typeof raw === "string" && /^[0-9]+$/.test(raw) ? Number(raw) : NaN;
-  return Number.isSafeInteger(ms) && ms < 1e13 ? ms : null; // < year 2286 keeps toISOString and ranks safe
+  const { issues, more } = await fetchIssuePages(
+    context.client, params.accountId, issueFilter(params), context.signal, MAX_ISSUE_PAGES
+  );
+  if (more) throw paramsError(PAGES_MESSAGE);
+  return issues;
 }
 
 const strings = (raw: unknown): string[] =>

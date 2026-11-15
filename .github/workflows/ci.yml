@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      # UT-110's real-build case skips here: CI has no compozy CLI.
+      - run: bun test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm run test:node
+      - run: bun run build

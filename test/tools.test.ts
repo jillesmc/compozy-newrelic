@@ -4,6 +4,7 @@ import { describe, test } from "node:test";
 import type { RPCError, ToolResult } from "@compozy/extension-sdk";
 
 import type { NerdGraphClient } from "../src/nerdgraph.ts";
+import { issuesQuery, parseIssuesParams } from "../src/sources/issues.ts";
 import { MAX_TOOL_BYTES } from "../src/tools/format.ts";
 import { alertIssuesTool, entitySearchQuery, listAccountsTool, searchEntitiesTool } from "../src/tools/graph-tools.ts";
 import { toolHandler, TOOLS } from "../src/tools/index.ts";
@@ -115,7 +116,9 @@ describe("investigation tools", () => {
       ], nextCursor: "c2" },
       c2: { issues: [{ issueId: "new", title: ["Errors"], priority: "CRITICAL", state: "CREATED", entityNames: [], activatedAt: null, createdAt: String(now - 2 * hour) }], nextCursor: null },
     };
-    const answer = (call: Call) => ({ actor: { account: { aiIssues: { issues: pages[String(call.variables.cursor ?? "first")] } } } });
+    // The shared aiIssues query (D-4) inlines the cursor as a string literal.
+    const cursorOf = (call: Call) => /cursor:"([^"]*)"/.exec(call.gql)?.[1] ?? "first";
+    const answer = (call: Call) => ({ actor: { account: { aiIssues: { issues: pages[cursorOf(call)] } } } });
     const all = await run(alertIssuesTool, { account_id: ACCOUNT }, answer);
     assert.deepEqual(all.rows.map(row => row.id), ["new", "old", "low"]);
     assert.deepEqual(all.rows[1], {
@@ -128,13 +131,19 @@ describe("investigation tools", () => {
       url: "https://one.newrelic.com",
     });
     assert.equal(all.calls.length, 2);
-    assert.deepEqual(all.calls.map(call => call.variables), [{ id: ACCOUNT, cursor: null }, { id: ACCOUNT, cursor: "c2" }]);
-    assert.match(all.calls[0]!.gql, /issues\(filter:\{states:\[ACTIVATED,CREATED\]\},cursor:\$cursor\)/);
+    assert.deepEqual(all.calls.map(call => call.variables), [{ id: ACCOUNT }, { id: ACCOUNT }]);
+    assert.match(all.calls[0]!.gql, /issues\(filter:\{states:\[ACTIVATED,CREATED\]\}\)\{/);
+    assert.match(all.calls[1]!.gql, /issues\(filter:\{states:\[ACTIVATED,CREATED\]\},cursor:"c2"\)\{/);
     assert.doesNotMatch(all.calls[0]!.gql, /conditionName|policyName/);
 
     const recent = await run(alertIssuesTool, { account_id: ACCOUNT, since: "24h", state: "all", priorities: ["HIGH", "CRITICAL"] }, answer);
     assert.deepEqual(recent.rows.map(row => row.id), ["new", "low"]);
-    assert.match(recent.calls[0]!.gql, /issues\(filter:\{priority:\["CRITICAL","HIGH"\]\},cursor/);
+    assert.match(recent.calls[0]!.gql, /issues\(filter:\{priority:\["CRITICAL","HIGH"\]\}\)\{/);
+
+    // One aiIssues code path: the tool sends exactly the query newrelic/issues sends for the same filter.
+    const open = await run(alertIssuesTool, { account_id: ACCOUNT, priorities: ["HIGH", "CRITICAL"] }, answer);
+    assert.equal(open.calls[0]!.gql, issuesQuery(parseIssuesParams({ account_id: ACCOUNT, priorities: ["CRITICAL", "HIGH"] }), null));
+    assert.equal(open.calls[1]!.gql, issuesQuery(parseIssuesParams({ account_id: ACCOUNT, priorities: ["CRITICAL", "HIGH"] }), "c2"));
 
     const many = await run(alertIssuesTool, { account_id: ACCOUNT, state: "closed" }, () => ({
       actor: { account: { aiIssues: { issues: { issues: range(30).map(i => ({ issueId: `i${i}`, title: ["t"], priority: "HIGH", state: "CLOSED", createdAt: now - i })), nextCursor: null } } } },

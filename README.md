@@ -2,18 +2,21 @@
 
 > **Experimental (0.x).** See [Compatibility](#compatibility).
 
-A [CompozyOS](https://github.com/compozy/compozy) extension named `newrelic`. It does three things:
+A [CompozyOS](https://github.com/compozy/compozy) extension named `newrelic`. It does four things:
 
 - **Four check-in sources** wake an always-on agent only when New Relic shows something new:
   `newrelic/nrql` (metric threshold), `newrelic/issues` (alert issues), `newrelic/errors` (new error
   types) and `newrelic/logs` (log spikes). A quiet check costs no model turn.
 - **Six read-only investigation tools** (`ext__newrelic__*`) backed by NerdGraph. They work with a
   User API key on every plan, free included.
-- **The official New Relic MCP, OAuth only** (`newrelic` and `newrelic-eu`). Its tools reach agents
-  only after a successful OAuth sign-in on an account that can use them.
+- **An API-key proxy to the official New Relic MCP** (`ext__newrelic__mcp_tools` and
+  `ext__newrelic__mcp_call`). Agents list and call every official MCP tool that works with the bound
+  key, and never see one that cannot.
+- **The official New Relic MCP via OAuth** (`newrelic` and `newrelic-eu`), for the OAuth-only tools.
+  Its tools reach agents only after a successful OAuth sign-in on an account that can use them.
 
 A `doctor` command tells you, without spending agent tokens, whether your account can use the
-official MCP. The extension never writes to New Relic.
+official MCP. The extension has nine tools including the doctor, and never writes to New Relic.
 
 ## Requirements
 
@@ -56,8 +59,8 @@ compozy extension secrets set newrelic --env NEW_RELIC_API_KEY   # hidden input
 compozy extension disable newrelic && compozy extension enable newrelic
 ```
 
-This one secret serves every source and tool. The official MCP does not use it; it signs in with
-OAuth (see [Official MCP via OAuth](#official-mcp-via-oauth)).
+This one secret serves every source and tool, including the MCP proxy. The OAuth servers do not use
+it; they sign in with OAuth (see [Official MCP via OAuth](#official-mcp-via-oauth)).
 
 ## Grant the tools
 
@@ -65,8 +68,8 @@ On a default daemon every `ext__newrelic__*` tool, including the doctor, is deni
 `tool_denied` (`source_disabled`). That is because `tools.policy.external_default` defaults to
 `disabled`. The check-in sources work without this step; the tools and the doctor need it.
 
-All tools are read-only, so you can mark the extension as a trusted read-only source. Add this to
-your user `config.toml` (`compozy config path --scope user` prints its path):
+All tools, including the MCP proxy, are read-only, so you can mark the extension as a trusted
+read-only source. Add this to your user `config.toml` (`compozy config path --scope user` prints its path):
 
 ```toml
 [tools.policy]
@@ -92,8 +95,12 @@ compozy extension exec newrelic --cmd doctor --region eu
 
 ```text
 NerdGraph: ok (region us, 21 accounts visible)
-MCP: available — run `compozy mcp auth login newrelic` to give agents the official New Relic tools
+MCP: available (35 tools exposed via API key; 2 OAuth-only hidden) — agents can use ext__newrelic__mcp_tools / mcp_call
 ```
+
+`N tools exposed` is what [the proxy](#official-mcp-via-the-api-key-proxy) offers agents with this
+key. `M OAuth-only hidden` counts the tools that need an OAuth sign-in; tools New Relic does not mark
+read-only are hidden too but not counted here.
 
 On a free account, or when the MCP admin toggle is off:
 
@@ -104,7 +111,7 @@ MCP: unavailable (403 from https://mcp.newrelic.com/mcp/) — agents keep the ex
 
 `MCP: unknown (<reason>)` means the probe could not decide (network error or timeout). Run it again
 later. The doctor never fails because of the MCP, and it makes no network call when no key is bound.
-It probes the MCP with `initialize` only and never calls an MCP tool.
+It probes the MCP with `initialize` and `tools/list` (10 s per request) and never calls an MCP tool.
 
 The same probe runs once when the extension starts and writes one line to
 `compozy extension logs newrelic`:
@@ -158,8 +165,9 @@ context:
         threshold: 50
 ---
 
-For each New Relic item, investigate with the ext__newrelic__* tools (and the newrelic MCP tools if
-available). Propose "Investigate <key>" with a one-paragraph hypothesis. Stay quiet when it recovers.
+For each New Relic item, investigate with the ext__newrelic__* tools (ext__newrelic__mcp_tools and
+ext__newrelic__mcp_call reach the official New Relic MCP tools). Propose "Investigate <key>" with a
+one-paragraph hypothesis. Stay quiet when it recovers.
 ```
 
 Save it and run a dry check. The first check is a **quiet baseline**: it records what is already
@@ -387,8 +395,9 @@ wakes the agent on every re-entry.
 
 ## Tools reference
 
-All tools are read-only and compact: at most 50 rows (25 for entities, issues and error groups) and
-8 KiB of text, with `truncated` set when something was cut. Every tool accepts `region` (`us`
+All tools are read-only and compact. The NerdGraph tools return at most 50 rows (25 for entities,
+issues and error groups) and 8 KiB of text; the [MCP proxy](#official-mcp-via-the-api-key-proxy) has
+its own bounds. `truncated` is set when something was cut. Every tool accepts `region` (`us`
 default, or `eu`).
 
 | Tool | Input | Returns |
@@ -399,29 +408,95 @@ default, or `eu`).
 | `ext__newrelic__alert_issues` | `account_id`, `state?` (`open` default, `closed`, `all`), `priorities?`, `since?` (≤ `24h`) | Up to 25 `{id, title, priority, state, entities, opened_at, url}`, highest priority and newest first. |
 | `ext__newrelic__error_groups` | `account_id`, `where?`, `window?` (`30m` default) | Up to 25 `{app, class, message (≤ 160), count, last_seen}`, most frequent first. |
 | `ext__newrelic__recent_logs` | `account_id`, `where`, `window?` (`15m` default), `limit?` (1–50, default 20) | Lines `{timestamp, service, level, message (≤ 300)}`. |
+| `ext__newrelic__mcp_tools` | `query?`, `limit?` (1–60, default 60) | The official MCP tools usable with the key; see [the proxy](#official-mcp-via-the-api-key-proxy). |
+| `ext__newrelic__mcp_call` | `tool`, `arguments?` (≤ 64 KiB) | One official MCP tool's result, text ≤ 16 KiB. |
 | `ext__newrelic__doctor` | — | The doctor report. It is an operator command; its description tells agents not to call it. |
 
-Without a bound key, the investigation tools return a `credential_absent` error that names the
-secrets command, and they make no network call.
+Without a bound key, the investigation and proxy tools return a `credential_absent` error that
+names the secrets command, and they make no network call.
 
 ## Plan matrix
 
 | Capability | Free plan | Paid plan | Credential |
 | --- | --- | --- | --- |
 | Check-in sources (`newrelic/*`) | yes | yes | User API key |
-| Investigation tools (`ext__newrelic__*`) | yes | yes | User API key |
+| NerdGraph investigation tools (`ext__newrelic__*`) | yes | yes | User API key |
 | Doctor | yes | yes | User API key |
+| Official MCP through the proxy (`mcp_tools`, `mcp_call`) | no: `mcp_unavailable` | yes, read-only tools that work with the key | User API key |
 | Official MCP (`newrelic`, `newrelic-eu`) | no | yes, with the role and admin toggle below | OAuth sign-in |
 | OAuth-only MCP tools (for example `natural_language_to_nrql_query`) | no | yes | OAuth sign-in |
-| Official MCP with an API key | not offered | not offered | — |
 
-The extension never offers the official MCP with an API key. With an API key, New Relic lists the
-OAuth-only tools but rejects calls to them with 403, so agents would spend tokens on tools that cannot
-work.
+On a free account, or one where the MCP is not enabled, the proxy tools answer `mcp_unavailable` at
+once and the NerdGraph tools keep working. With an API key, New Relic lists the OAuth-only tools but
+rejects calls to them with 403, so the proxy hides them instead of letting agents spend tokens on
+them.
+
+## Official MCP via the API-key proxy
+
+Two tools reach the official New Relic MCP (`https://mcp.newrelic.com/mcp/`, EU
+`https://mcp.eu.newrelic.com/mcp/`) with the bound User API key. No OAuth sign-in, no 24-hour
+re-login, and no extra MCP server to configure. They need the same grant as every
+`ext__newrelic__*` tool (see [Grant the tools](#grant-the-tools)).
+
+A remote tool is exposed only when all of these hold:
+
+- New Relic annotates it `readOnlyHint: true` and not `destructiveHint: true`. A tool without
+  annotations is not exposed.
+- It is not OAuth-only. The seed is `natural_language_to_nrql_query` and `search_traces`; a tool
+  whose call fails with `requires OAuth` is learned as OAuth-only for the life of the extension
+  process and logged once (`newrelic: mcp tool <name> requires OAuth; hidden`).
+- The region's MCP is available for the key.
+
+The catalog is cached per region for 10 minutes, so tools New Relic adds or removes appear or
+disappear within 10 minutes, without an extension release.
+
+| Tool | Input | Returns |
+| --- | --- | --- |
+| `ext__newrelic__mcp_tools` | `region?` (`us` default, or `eu`), `query?` (case-insensitive substring of the name or description), `limit?` (1–60, default 60) | `{region, state, exposed: [{name, description (≤ 200), input: {prop: "type — description (≤ 80)"}}], hidden: {oauth_only, not_read_only}, truncated}`, sorted by name. |
+| `ext__newrelic__mcp_call` | `tool`, `arguments?` (object, ≤ 64 KiB as JSON), `region?` | `{tool, is_error, text (≤ 16 KiB), structured?, truncated}`. |
+
+```json
+{"tool": "ext__newrelic__mcp_tools", "input": {"query": "trace"}}
+{"tool": "ext__newrelic__mcp_call", "input": {"tool": "list_recent_issues", "arguments": {"account_id": 1234567}}}
+```
+
+```json
+{"tool": "list_recent_issues", "is_error": false, "text": "{\"issues\": [ ... ]}", "truncated": false}
+```
+
+- Arguments are forwarded as given; the remote tool validates them. A remote tool error returns
+  `is_error: true` with the remote message in `text`.
+- Text content is joined and cut at 16 KiB. `structured` is passed through only when it fits in
+  16 KiB. Images and other non-text parts become one-line placeholders.
+- Calls time out after 60 s (other requests after 10 s). An expired MCP session is re-initialized once.
+- The key is redacted from every result and error.
+
+Refusals and errors:
+
+| Condition | Code | Message |
+| --- | --- | --- |
+| OAuth-only tool (seeded or learned) | `mcp_tool_not_exposed` | `natural_language_to_nrql_query requires OAuth; sign in with compozy mcp auth login newrelic or use another tool` (`newrelic-eu` for `eu`) |
+| Tool not marked read-only, or destructive | `mcp_tool_not_exposed` | `<tool> is not marked read-only by New Relic; the proxy does not call it` |
+| Unknown or removed tool | `mcp_tool_not_exposed` | `<tool> is not in the New Relic MCP catalog for region us` |
+| MCP unavailable for the key | `mcp_unavailable` | `New Relic MCP unavailable for this API key (403); use the ext__newrelic__* NerdGraph tools` |
+| Key not bound | `credential_absent` | Same text as the other tools; no network call. |
+| 401 | `credential_expired` | `New Relic rejected the API key; bind a User API key (NRAK-...)` |
+| 429 | `rate_limited` | `New Relic rate limit reached; retry later` |
+| 5xx, network error or timeout | `mcp_request_failed` | `mcp_request_failed: <status or error>` |
+
+Refusals send no request, and an OAuth-only tool is refused even before the catalog loads. When
+`initialize` answers 403 or 404 the region is `unavailable` and is probed again after 10 minutes;
+until then both tools answer `mcp_unavailable` at once. After any other probe failure (401, 429,
+5xx, network) the call that probed gets the matching error above, and calls in the next minute get
+`mcp_unavailable` with the same reason. Each region state change writes one line
+(`newrelic: region=us mcp=available|unavailable(<status>)|unknown`) to
+`compozy extension logs newrelic`. Arguments and results are never logged.
 
 ## Official MCP via OAuth
 
-Sign in once per scope when the doctor reports `MCP: available`:
+The [proxy](#official-mcp-via-the-api-key-proxy) covers every tool that works with the API key. Sign
+in with OAuth only if agents need the OAuth-only tools, once per scope, when the doctor reports
+`MCP: available`:
 
 ```bash
 compozy mcp auth login newrelic --owner extension:newrelic --scope workspace --workspace my-project
@@ -439,7 +514,7 @@ What New Relic requires:
 - An organization role of **Organization Read Only**, **Organization Manager** or **Product Admin**.
 - The admin setting **New Relic MCP Server** turned on. It is on by default.
 - Access tokens last 5 minutes and refresh automatically. New Relic asks you to sign in again after
-  24 hours.
+  24 hours, which is why unattended agents should rely on the proxy.
 
 Redirect: CompozyOS's default callback (`http://127.0.0.1:2123/api/mcp/oauth/callback`) works.
 New Relic accepts only pre-registered redirect paths, so if you changed `mcp.oauth.redirect_uri` to
@@ -447,23 +522,40 @@ another path, the sign-in is rejected (`redirect_uri ... does not match any of t
 Client's pre-registered redirect urls`).
 
 The servers use New Relic's published public client (PKCE, no secret) with scopes
-`observability:read offline_access`. The API key is never sent to the MCP for tool use. The doctor's
-probe sends it only to an `initialize` request.
+`observability:read offline_access`. The API key is never sent to the OAuth servers; only the proxy
+and the doctor's probe send it, in the `api-key` header.
 
-## Replacing a manual `newrelicapi` MCP
+## Migrating from a manual `newrelicapi` MCP
 
-If you configured the New Relic MCP by hand with an API key header (often named `newrelicapi`), its
-OAuth-only tools fail with 403 and agents waste turns on them. To replace it:
+If you configured the New Relic MCP by hand with an API-key header (often named `newrelicapi`), the
+proxy replaces it: every tool you used through it, except the OAuth-only ones, is reachable through
+`ext__newrelic__mcp_call`.
 
-1. Install this extension, bind the key and run the doctor.
-2. If the doctor reports `MCP: available`, sign in with `compozy mcp auth login newrelic` as above.
-3. Remove the manual server from **Settings → MCP servers**, or delete its `[mcp_servers.newrelicapi]`
-   table from your `config.toml`.
-4. Update agent instructions that name `newrelicapi` tools: use the `newrelic` MCP tools and the
-   `ext__newrelic__*` tools instead.
+1. Install or update this extension, bind the key and grant the tools (sections above).
+2. Run the doctor. It should report `MCP: available (N tools exposed via API key; …)`.
+3. Remove the manual server from your user `config.toml` and drop its trusted source, keeping
+   `"extension:newrelic"`:
 
-The manual server and the extension's server keep separate credentials, so they can coexist while
-you migrate.
+   ```diff
+   -[[mcp_servers]]
+   -name = "newrelicapi"
+   -command = "node"
+   -args = ["<path>/mcp-remote/dist/proxy.js", "https://mcp.newrelic.com/mcp/", "--transport", "http-only", "--header", "Api-Key:${NEW_RELIC_API_KEY}"]
+   -secret_env = { NEW_RELIC_API_KEY = "<your vault ref>" }
+    [tools.policy]
+   -trusted_sources = ["mcp:newrelicapi", "extension:newrelic"]
+   +trusted_sources = ["extension:newrelic"]
+   ```
+
+   Then restart the daemon (`compozy daemon stop && compozy daemon start`).
+4. Update agent instructions that name `newrelicapi` tools: call `ext__newrelic__mcp_tools` to find a
+   tool and `ext__newrelic__mcp_call` to run it.
+5. Verify: run the doctor again, then have an agent call `ext__newrelic__mcp_tools`. It should return
+   `state: "available"` and the tools you used before.
+
+OAuth-only tools (such as `natural_language_to_nrql_query`) stay reachable only through the OAuth
+servers `newrelic` and `newrelic-eu` (see [Official MCP via OAuth](#official-mcp-via-oauth)). The
+manual server and the extension keep separate secrets, so they can coexist while you migrate.
 
 ## Cost model
 
@@ -473,6 +565,9 @@ you migrate.
 - **Only new items wake the agent.** A check with nothing new returns no items, and the daemon skips
   the model turn.
 - **Tools cost tokens only when the woken agent uses them.** Tool output is compact and bounded.
+- **The MCP proxy adds two small, static tool schemas.** The remote catalog is never part of the
+  agent's context up front: its schemas are loaded on demand, only when an agent calls
+  `ext__newrelic__mcp_tools`, and that answer is capped at 60 compact rows.
 - New Relic counts each query against your NRQL and NerdGraph usage. Pick `min_interval` with that in
   mind.
 
@@ -497,9 +592,10 @@ you migrate.
 ## Security notes
 
 - The API key lives in the CompozyOS secret store and travels only in the NerdGraph request header
-  (and the doctor's MCP probe). It never appears in items, tool results, error messages, logs or
-  source state; key text that New Relic echoes back is redacted before anything is shortened.
-- The extension is read-only: it sends no NerdGraph mutations and never calls an MCP tool.
+  and in the `api-key` header to the region's official MCP host (proxy and doctor). It never appears
+  in items, tool results, error messages, logs or source state; key text that New Relic echoes back is redacted before anything is shortened.
+- The extension is read-only: it sends no NerdGraph mutations, and the proxy calls only remote tools
+  New Relic marks read-only and not destructive. The check-in sources never touch the MCP.
 - No Host API permissions are requested.
 
 ## Development
@@ -526,6 +622,19 @@ not meant for real use (D-1):
 node test/fake-nerdgraph.ts --port 8788
 curl -X POST http://127.0.0.1:8788/_fake/rows -d '[{"facet":"checkout-api","p95":2.31}]'
 # in HEARTBEAT.md: with: { account_id: 1234567, region: "loopback:8788", ... }; any NRAK-... key works
+```
+
+The same fake serves a fake official MCP at `POST /mcp/` (JSON answers, or SSE with `--sse`), so
+`region: "loopback:8788"` also works for `mcp_tools`, `mcp_call` and the doctor. Its default
+catalog mixes read-only, OAuth-only, destructive and unannotated tools. `/_fake/mcp` reads and
+changes its settings:
+
+```bash
+node test/fake-nerdgraph.ts --port 8788 --sse
+curl http://127.0.0.1:8788/_fake/mcp                                   # mode, statuses, tool names
+curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"initStatus":403}'    # MCP unavailable for the key
+curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"expireCalls":1}'     # next call finds its session expired
+curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"reset":true}'        # default catalog and settings
 ```
 
 ### Releasing

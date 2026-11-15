@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+# Conductor checkpoint stays local
+.compozy/tasks/**/_run.md
+.compozy/tasks/**/_review-*.md

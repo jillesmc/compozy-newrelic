@@ -46,6 +46,8 @@ export interface FakeNerdGraph {
   issuePageSize: number;
   requests: FakeRequest[];
   respond?: (request: FakeRequest) => FakeResponse | undefined;
+  /** Answer of `POST /mcp/` (doctor probe); default: initialize result with a tools capability. */
+  mcp?: FakeResponse;
   close(): Promise<void>;
 }
 
@@ -107,6 +109,7 @@ export async function startFakeNerdGraph(
       }
       return send(override.status, override.body ?? "");
     }
+    if (path === "/mcp/") return answerMcp(fake, request, send);
     if (req.method !== "POST" || !/^(\/eu)?\/graphql$/.test(path)) return send(404, { errors: [{ message: "not found" }] });
     if (!/^NRAK-\S+$/.test(String(req.headers["api-key"] ?? ""))) return send(401, { errors: [{ message: "unauthorized" }] });
     const id = body.variables?.id;
@@ -124,6 +127,17 @@ function issuePage(fake: FakeNerdGraph, query: string) {
   const offset = Number(/cursor:"([0-9]+)"/.exec(query)?.[1] ?? 0);
   const end = offset + fake.issuePageSize;
   return { issues: fake.issues.slice(offset, end), nextCursor: end < fake.issues.length ? String(end) : null };
+}
+
+/** Fake MCP endpoint for the doctor's `initialize` probe (S3): `api-key` NRAK-... required. */
+function answerMcp(fake: FakeNerdGraph, request: FakeRequest, send: (status: number, body: unknown) => void): void {
+  if (fake.mcp) return send(fake.mcp.status, fake.mcp.body ?? "");
+  if (!/^NRAK-\S+$/.test(String(request.headers["api-key"] ?? ""))) return send(401, "");
+  send(200, {
+    jsonrpc: "2.0",
+    id: (request.body as { id?: unknown }).id ?? 1,
+    result: { protocolVersion: "2025-06-18", capabilities: { tools: { listChanged: true } }, serverInfo: { name: "fake-mcp", version: "0" } },
+  });
 }
 
 const entryPoint = process.argv[1];

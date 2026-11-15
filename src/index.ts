@@ -2,8 +2,10 @@ import { pathToFileURL } from "node:url";
 
 import { Extension, type ExtensionOptions } from "@compozy/extension-sdk";
 
+import { startupProbe } from "./doctor.ts";
 import { createPollHandler, type PollDeps } from "./poll.ts";
 import { SOURCES } from "./sources/index.ts";
+import { toolHandler, TOOLS, type ToolDeps } from "./tools/index.ts";
 
 export const EXTENSION_VERSION = "0.1.0";
 /**
@@ -20,7 +22,7 @@ class NewRelicExtension extends Extension {
   }
 }
 
-export type NewRelicExtensionDeps = PollDeps;
+export type NewRelicExtensionDeps = PollDeps & ToolDeps;
 
 /** The only module that builds the SDK Extension and reads process.env (through PollDeps defaults). */
 export function createExtension(options: ExtensionOptions = {}, deps: NewRelicExtensionDeps = {}): Extension {
@@ -44,6 +46,12 @@ export function createExtension(options: ExtensionOptions = {}, deps: NewRelicEx
       createPollHandler(source, { ...deps, env })
     );
   }
+  for (const tool of TOOLS) {
+    const { name, description, inputSchema, command } = tool;
+    extension.tool(name, { description, inputSchema, readOnly: true, ...(command ? { command } : {}) }, toolHandler(tool, { ...deps, env }));
+  }
+  // One probe line at start (US-010.AC-2); onReady never runs in __describe mode and never blocks startup.
+  extension.onReady(() => void startupProbe({ ...deps, env }));
   return extension;
 }
 

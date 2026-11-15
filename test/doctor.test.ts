@@ -12,15 +12,15 @@ interface Seen {
   body: Record<string, unknown>;
 }
 
-/** Fake fetch: NerdGraph answers `accounts` ids; the MCP URL answers `mcp()`. */
-function fakeFetch(accounts: number, mcp: () => Response | Promise<Response>): { fetch: typeof fetch; seen: Seen[] } {
+/** Fake fetch: NerdGraph answers `accounts` ids; the MCP URL answers `mcp(body)`. */
+function fakeFetch(accounts: number, mcp: (body: Record<string, unknown>) => Response | Promise<Response>): { fetch: typeof fetch; seen: Seen[] } {
   const seen: Seen[] = [];
   const fetchFn = (async (url: string, init: RequestInit) => {
     seen.push({ url, headers: init.headers as Record<string, string>, body: JSON.parse(String(init.body)) });
     if (url.endsWith("/graphql")) {
       return Response.json({ data: { actor: { accounts: Array.from({ length: accounts }, (_, id) => ({ id })) } } });
     }
-    return await mcp();
+    return await mcp(seen[seen.length - 1]!.body);
   }) as unknown as typeof fetch;
   return { fetch: fetchFn, seen };
 }
@@ -28,28 +28,47 @@ function fakeFetch(accounts: number, mcp: () => Response | Promise<Response>): {
 const initialize = (capabilities: Record<string, unknown>) =>
   ({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18", capabilities, serverInfo: { name: "nr", version: "1" } } });
 
+const READ = { readOnlyHint: true };
+const CATALOG = [
+  { name: "list_recent_issues", annotations: READ },
+  { name: "analyze_transactions", annotations: READ },
+  { name: "natural_language_to_nrql_query", annotations: READ },
+  { name: "search_traces", annotations: READ },
+  { name: "delete_dashboard", annotations: { readOnlyHint: false, destructiveHint: true } },
+];
+
+/** A working MCP: initialize (session s-1), the initialized notification, then one tools/list page. */
+function mcpServer(wrap: (body: unknown) => Response = body => Response.json(body, { headers: { "Mcp-Session-Id": "s-1" } })) {
+  return (body: Record<string, unknown>) => {
+    if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+    if (body.method === "tools/list") return wrap({ jsonrpc: "2.0", id: body.id, result: { tools: CATALOG } });
+    return wrap({ ...initialize({ tools: {} }), id: body.id });
+  };
+}
+
 describe("doctor", () => {
-  test("UT-100 doctor: NerdGraph ok with 21 accounts and MCP 200 with tools → available plus the login hint", async () => {
-    const { fetch, seen } = fakeFetch(21, () => Response.json(initialize({ tools: {} })));
+  test("UT-100 doctor: NerdGraph ok with 21 accounts and MCP tools/list → available with exposed and OAuth-only counts", async () => {
+    const { fetch, seen } = fakeFetch(21, mcpServer());
     const report = await runDoctor("us", { env, fetch });
     assert.equal(
       formatReport(report),
       "NerdGraph: ok (region us, 21 accounts visible)\n" +
-        "MCP: available — run `compozy mcp auth login newrelic` to give agents the official New Relic tools"
+        "MCP: available (2 tools exposed via API key; 2 OAuth-only hidden) — agents can use ext__newrelic__mcp_tools / mcp_call"
     );
     assert.equal(formatProbeLine(report), "newrelic: probe region=us nerdgraph=ok mcp=available\n");
-    const mcp = seen.find(call => call.url === "https://mcp.newrelic.com/mcp/");
-    assert.equal(mcp?.headers["api-key"], FAKE_KEY);
-    assert.equal(mcp?.body.method, "initialize");
-    assert.equal((mcp?.body.params as { protocolVersion: string }).protocolVersion, "2025-06-18");
-    assert.deepEqual(seen.map(call => call.body.method ?? "graphql").sort(), ["graphql", "initialize"]);
+    const mcp = seen.filter(call => call.url === "https://mcp.newrelic.com/mcp/");
+    assert.deepEqual(mcp.map(call => call.body.method), ["initialize", "notifications/initialized", "tools/list"]);
+    assert.ok(mcp.every(call => call.headers["api-key"] === FAKE_KEY));
+    assert.equal((mcp[0]?.body.params as { protocolVersion: string }).protocolVersion, "2025-06-18");
+    assert.equal(mcp[2]?.headers["Mcp-Session-Id"], "s-1");
+    assert.ok(!seen.some(call => call.body.method === "tools/call"));
 
-    const sse = fakeFetch(1, () => new Response(`event: message\ndata: ${JSON.stringify(initialize({ tools: { listChanged: true } }))}\n\n`, {
-      headers: { "Content-Type": "text/event-stream" },
-    }));
+    const sse = fakeFetch(1, mcpServer(body => new Response(`event: message\ndata: ${JSON.stringify(body)}\n\n`, {
+      headers: { "Content-Type": "text/event-stream", "Mcp-Session-Id": "s-2" },
+    })));
     const eu = formatReport(await runDoctor("eu", { env, fetch: sse.fetch }));
     assert.equal(eu.split("\n")[0], "NerdGraph: ok (region eu, 1 account visible)");
-    assert.match(eu, /compozy mcp auth login newrelic-eu/);
+    assert.match(eu, /MCP: available \(2 tools exposed via API key; 2 OAuth-only hidden\)/);
     assert.ok(sse.seen.some(call => call.url === "https://mcp.eu.newrelic.com/mcp/"));
   });
 

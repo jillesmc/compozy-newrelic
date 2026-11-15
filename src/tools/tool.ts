@@ -2,6 +2,7 @@ import type { ExtensionToolOptions, JSONValue, ToolResult } from "@compozy/exten
 
 import { paramsError } from "../errors.ts";
 import { redactDeep, redactor } from "../items.ts";
+import type { McpCatalog } from "../mcp-catalog.ts";
 import { createNerdGraphClient, regionEndpoints, resolveApiKey, type NerdGraphClient, type RegionEndpoints } from "../nerdgraph.ts";
 import { parseRegion, REGION_PATTERN } from "../params.ts";
 import { withBudget } from "../poll.ts";
@@ -16,8 +17,11 @@ export interface ToolDeps {
   mcpTimeoutMs?: number;
   /** Per-call budget; defaults to TOOL_BUDGET_MS. */
   budgetMs?: number;
-  /** Clock for `since` filters; defaults to the wall clock. */
+  /** Clock for `since` filters and the MCP catalog TTL; defaults to the wall clock. */
   now?: () => Date;
+  stderr?: { write(line: string): unknown };
+  /** The process MCP catalog shared by the proxy tools (index.ts builds it). */
+  mcp?: McpCatalog;
 }
 
 export interface ToolContext {

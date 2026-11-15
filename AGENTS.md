@@ -1,10 +1,11 @@
 # compozy-newrelic
 
 CompozyOS extension `newrelic`: four check-in sources (`newrelic/nrql`, `newrelic/issues`,
-`newrelic/errors`, `newrelic/logs`), NerdGraph-backed investigation tools, a `doctor` command, and the
-official New Relic MCP declared OAuth-only. The design contract lives in
-`.compozy/tasks/newrelic-sources/` (`_spec.md`, `_dx.md`, `_user_stories.md`, `_tests.md`,
-`_slices.md`, `adrs/`). Implement exactly that contract; record any deviation in the spec before
+`newrelic/errors`, `newrelic/logs`), NerdGraph-backed investigation tools, a `doctor` command, the
+official New Relic MCP declared OAuth-only, and an API-key proxy to that MCP (`mcp_tools`,
+`mcp_call`). The design contract lives in `.compozy/tasks/newrelic-sources/` (v0.1) and
+`.compozy/tasks/newrelic-mcp-proxy/` (v0.2, which supersedes v0.1 where they differ) (`_spec.md`,
+`_dx.md`, `_user_stories.md`, `_tests.md`, `_slices.md`, `adrs/`). Implement exactly that contract; record any deviation in the spec before
 coding it. The sibling `../compozy-jira` is the reference implementation for structure, redaction,
 error mapping and the loopback test approach.
 
@@ -21,8 +22,10 @@ error mapping and the loopback test approach.
 ## Rules
 
 - Only `src/index.ts` imports the SDK `Extension` and reads environment variables; only
-  `src/nerdgraph.ts` and `src/doctor.ts` do network I/O.
-- Never log, return, or persist `NEW_RELIC_API_KEY`. Never send NerdGraph mutations; never call MCP tools.
+  `src/nerdgraph.ts`, `src/mcp-client.ts` and `src/doctor.ts` do network I/O.
+- `src/sources/**` and `src/engine.ts` never import `mcp-client` or `mcp-catalog` (UT-123).
+- Never log, return, or persist `NEW_RELIC_API_KEY`. Never send NerdGraph mutations. Only the proxy
+  (`src/tools/mcp-proxy.ts`) calls MCP tools, and only exposed read-only ones.
 - Items and tool results stay compact and bounded; never include raw log lines or stack traces.
 - Keep source files cohesive and small (< 300 lines); extract before growing.
 - Test IDs from `_tests.md` appear in test names (e.g. `UT-010 engine: ...`).

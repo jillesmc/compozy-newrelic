@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 
-import type { HeartbeatSourceRequest, HeartbeatSourceResult, JSONValue } from "@compozy/extension-sdk";
+import type { HeartbeatSourceRequest, HeartbeatSourceResult, JSONValue, ToolResult } from "@compozy/extension-sdk";
 
 import { SourceError } from "../src/errors.ts";
+import { createMcpCatalog, OAUTH_ONLY_SEED } from "../src/mcp-catalog.ts";
+import { createMcpClient } from "../src/mcp-client.ts";
 import type { NerdGraphClient } from "../src/nerdgraph.ts";
+import { toolHandler, TOOLS } from "../src/tools/index.ts";
+import { startFakeNerdGraph } from "./fake-nerdgraph.ts";
 
 export const ACCOUNT = 1234567;
 export const FAKE_KEY = "NRAK-FAKE0TEST0KEY0000000000000";
@@ -92,4 +96,55 @@ export async function assertRowOrderInvariant(
     assert.equal(JSON.stringify(actual), JSON.stringify(expected));
   }
   return expected;
+}
+
+/**
+ * MCP proxy harness: the in-process fake NerdGraph + MCP, a counting fetch, an injected clock and
+ * stderr, and a fresh catalog with its own OAuth-only set (no state leaks between tests).
+ */
+export async function startProxyHarness() {
+  const nr = await startFakeNerdGraph();
+  let fetches = 0;
+  let clock = Date.parse(NOW);
+  const lines: string[] = [];
+  const countingFetch = ((url: string, init: RequestInit) => {
+    fetches++;
+    return fetch(url, init);
+  }) as typeof fetch;
+  const stderr = { write: (line: string) => lines.push(line) };
+  const mcp = createMcpCatalog({
+    client: region => createMcpClient(region, FAKE_KEY, { fetch: countingFetch }),
+    now: () => clock,
+    stderr,
+    oauthOnly: new Set(OAUTH_ONLY_SEED),
+  });
+  const deps = { env: { NEW_RELIC_API_KEY: FAKE_KEY }, fetch: countingFetch, now: () => new Date(clock), stderr, mcp };
+  return {
+    nr,
+    mcp,
+    deps,
+    lines,
+    fetches: () => fetches,
+    advance: (ms: number) => void (clock += ms),
+    async call(name: string, input: Record<string, unknown> = {}): Promise<ToolResult> {
+      const tool = TOOLS.find(entry => entry.name === name)!;
+      return (await toolHandler(tool, deps)({ input: { region: nr.region, ...input } } as never)) as never;
+    },
+  };
+}
+
+/** Structured output of a proxy tool result. */
+export function out(result: unknown): Record<string, any> {
+  return (result as { structured: Record<string, any> }).structured;
+}
+
+/** Awaits a rejected tool call and returns its `{code, reason?, message}`. */
+export async function toolFailure(promise: Promise<unknown>): Promise<{ code: string; reason?: string; message: string }> {
+  try {
+    await promise;
+  } catch (error) {
+    const rpc = error as { message: string; data?: { code: string; reason?: string } };
+    return { code: rpc.data?.code ?? "", ...(rpc.data?.reason ? { reason: rpc.data.reason } : {}), message: rpc.message };
+  }
+  throw new Error("expected a tool error");
 }

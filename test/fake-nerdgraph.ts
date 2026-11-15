@@ -19,10 +19,21 @@
  *   # HEARTBEAT.md: with: { account_id: 1234567, region: "loopback:8788", ... }; any NRAK-... key works.
  *
  * Requests without an `API-Key: NRAK-...` header get 401.
+ *
+ * `POST /mcp/` is the fake official MCP (test/fake-mcp.ts): `nr.mcpFake` in-process, or standalone
+ *   node test/fake-nerdgraph.ts --port 8788 --sse          # SSE answers (default JSON)
+ *   curl http://127.0.0.1:8788/_fake/mcp                   # mode, pageSize, statuses, tool names
+ *   curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"mode":"sse"}'        # or "json"
+ *   curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"initStatus":403}'    # MCP unavailable for the key
+ *   curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"initStatus":0,"status":0,"expireCalls":1}'
+ *   curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"tools":[{"name":"x","annotations":{"readOnlyHint":true}}]}'
+ *   curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"reset":true}'        # default catalog and settings
  */
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { pathToFileURL } from "node:url";
+
+import { answerMcp, configureFakeMcp, createFakeMcp, type FakeMcp } from "./fake-mcp.ts";
 
 export interface FakeRequest {
   path: string;
@@ -46,8 +57,10 @@ export interface FakeNerdGraph {
   issuePageSize: number;
   requests: FakeRequest[];
   respond?: (request: FakeRequest) => FakeResponse | undefined;
-  /** Answer of `POST /mcp/` (doctor probe); default: initialize result with a tools capability. */
+  /** Fixed answer of every `POST /mcp/`, bypassing the fake MCP. */
   mcp?: FakeResponse;
+  /** The fake official MCP behind `POST /mcp/`. */
+  mcpFake: FakeMcp;
   close(): Promise<void>;
 }
 
@@ -62,6 +75,7 @@ export async function startFakeNerdGraph(
     issues: [],
     issuePageSize: 50,
     requests: [],
+    mcpFake: createFakeMcp(),
     close: async () => {
       for (const release of holds) release();
       server.closeAllConnections();
@@ -86,6 +100,16 @@ export async function startFakeNerdGraph(
       if (req.method === "POST") fake.issues = JSON.parse(raw || "[]");
       return send(200, fake.issues);
     }
+    if (path === "/_fake/mcp") {
+      if (req.method === "POST") {
+        const update = JSON.parse(raw || "{}");
+        if (update.reset) fake.mcpFake = createFakeMcp();
+        delete update.reset;
+        configureFakeMcp(fake.mcpFake, update);
+      }
+      const { sessions: _s, requests, tools, ...settings } = fake.mcpFake;
+      return send(200, { ...settings, tools: tools.map(tool => tool.name), requests: requests.length });
+    }
     let body: FakeRequest["body"];
     try {
       body = JSON.parse(raw || "{}");
@@ -94,22 +118,25 @@ export async function startFakeNerdGraph(
     }
     const request: FakeRequest = { path, headers: req.headers, body };
     fake.requests.push(request);
+    const wait = (ms: number) =>
+      new Promise<void>(resolve => {
+        const timer = setTimeout(done, ms);
+        function done() {
+          clearTimeout(timer);
+          holds.delete(done);
+          resolve();
+        }
+        holds.add(done);
+      });
     const override = fake.respond?.(request);
     if (override) {
-      if (override.delayMs) {
-        await new Promise<void>(resolve => {
-          const timer = setTimeout(done, override.delayMs);
-          function done() {
-            clearTimeout(timer);
-            holds.delete(done);
-            resolve();
-          }
-          holds.add(done);
-        });
-      }
+      if (override.delayMs) await wait(override.delayMs);
       return send(override.status, override.body ?? "");
     }
-    if (path === "/mcp/") return answerMcp(fake, request, send);
+    if (path === "/mcp/") {
+      if (fake.mcp) return send(fake.mcp.status, fake.mcp.body ?? "");
+      return answerMcp(fake.mcpFake, req.headers, raw, res, wait);
+    }
     if (req.method !== "POST" || !/^(\/eu)?\/graphql$/.test(path)) return send(404, { errors: [{ message: "not found" }] });
     if (!/^NRAK-\S+$/.test(String(req.headers["api-key"] ?? ""))) return send(401, { errors: [{ message: "unauthorized" }] });
     const id = body.variables?.id;
@@ -129,21 +156,12 @@ function issuePage(fake: FakeNerdGraph, query: string) {
   return { issues: fake.issues.slice(offset, end), nextCursor: end < fake.issues.length ? String(end) : null };
 }
 
-/** Fake MCP endpoint for the doctor's `initialize` probe (S3): `api-key` NRAK-... required. */
-function answerMcp(fake: FakeNerdGraph, request: FakeRequest, send: (status: number, body: unknown) => void): void {
-  if (fake.mcp) return send(fake.mcp.status, fake.mcp.body ?? "");
-  if (!/^NRAK-\S+$/.test(String(request.headers["api-key"] ?? ""))) return send(401, "");
-  send(200, {
-    jsonrpc: "2.0",
-    id: (request.body as { id?: unknown }).id ?? 1,
-    result: { protocolVersion: "2025-06-18", capabilities: { tools: { listChanged: true } }, serverInfo: { name: "fake-mcp", version: "0" } },
-  });
-}
-
 const entryPoint = process.argv[1];
 if (entryPoint && import.meta.url === pathToFileURL(entryPoint).href) {
   const args = process.argv.slice(2);
   const at = args.indexOf("--port");
   const fake = await startFakeNerdGraph({ port: at >= 0 ? Number(args[at + 1]) : 8788 });
+  if (args.includes("--sse")) fake.mcpFake.mode = "sse";
   console.log(`fake NerdGraph listening on http://127.0.0.1:${fake.port}/graphql (region ${fake.region})`);
+  console.log(`fake MCP (${fake.mcpFake.mode}) on http://127.0.0.1:${fake.port}/mcp/; settings at /_fake/mcp`);
 }

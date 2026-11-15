@@ -320,3 +320,47 @@ S2 and S3 can run in parallel after S1.
 ## Architecture Decision Records
 
 - [ADR-001: Dynamic two-tool MCP proxy with API key](adrs/adr-001.md)
+
+## Deviations
+
+- **D-12 (2026-11-15, S1, recorded before coding): OAuth learning also reads remote tool errors.**
+  Business Rule 2 learns from HTTP 403 or a JSON-RPC error containing `requires OAuth`. Whether New
+  Relic reports the OAuth refusal that way, or as a `tools/call` result with `isError: true`, is not
+  verified (Open Questions). Change: a result with `isError: true` whose text contains
+  `requires OAuth` (case-insensitive) is learned the same way and refused as
+  `mcp_tool_not_exposed (oauth_only)`. This only hides a tool that cannot work; it never exposes one.
+- **D-13 (2026-11-15, S1, recorded before coding): refusal and state order.**
+  1. A seeded or learned OAuth-only name is refused (`oauth_only`) before the catalog or region state
+     is consulted, so UT-150 makes zero requests even on a cold or unavailable region. Every other
+     name needs an `available` region first (`mcp_unavailable` otherwise), then `unknown_tool`, then
+     `not_read_only`. A tool that is both OAuth-only and not read-only reports `oauth_only` and counts
+     once, as `oauth_only`, in `hidden`.
+  2. Region state: initialize 403/404 (or a 403 on `tools/list`) → `unavailable(<status>)`, re-probed
+     after one TTL. Any other probe failure (401, 429, 5xx, network, timeout, no tools capability)
+     → `unknown`. The call that ran the probe gets the mapped error (`credential_expired`,
+     `rate_limited`, `mcp_request_failed`); calls within the next minute get `mcp_unavailable` with
+     the same reason and no request. A failed refresh of a stale catalog is retried at most once per
+     minute. If it is still failing two TTLs after the last success, the region becomes
+     `unavailable`.
+  3. The stderr line format is `newrelic: region=<region> mcp=available|unavailable(<status>)|unknown`.
+     The learned-tool line is `newrelic: mcp tool <name> requires OAuth; hidden`.
+- **D-14 (2026-11-15, S1, recorded before coding): interface details the Core Interfaces leave open.**
+  1. `McpCatalog` gains `hidden(region)` (the `mcp_tools` counts) and `client(region)` (the
+     session-reusing client the proxy forwards through).
+  2. `createMcpClient` options are `{fetch, timeoutMs, callTimeoutMs}`. The client needs no clock;
+     the catalog takes the injected clock for TTLs.
+  3. The OAuth-only set is process-wide by default, so the doctor counts learned tools too. Tests
+     inject their own set.
+  4. Result envelopes. `mcp_tools` returns the contract object as `structured` and its JSON as the
+     text. `mcp_call` returns the contract object as `structured` and the bounded remote text as the
+     text content. A JSON-RPC error from `tools/call` (other than a session error) is relayed as
+     `is_error: true` with its redacted message.
+  5. A session is expired when a request that carried `Mcp-Session-Id` gets 404, or 400 with
+     `session` in the body.
+- **D-15 (2026-11-15, S1, recorded before coding): doctor probe.** The doctor reuses the proxy client
+  (`initialize`, `notifications/initialized`, `tools/list`) with the Business Rule 10 timeout of
+  10 s. The v0.1 timeout was 5 s. The available line is
+  `MCP: available (N tools exposed via API key; M OAuth-only hidden) — agents can use ext__newrelic__mcp_tools / mcp_call`.
+  Tools hidden as not read-only are not printed. The unavailable and unknown lines keep their v0.1
+  text. A 401 at initialize is still printed as `unavailable (401 …)` (v0.1 UT-101), while the proxy
+  tools map it to `credential_expired`. The startup probe line format is unchanged.

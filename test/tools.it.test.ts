@@ -73,11 +73,10 @@ describe("tools and doctor against the fake NerdGraph and MCP", () => {
     assert.equal(
       await call("doctor", {}),
       `NerdGraph: ok (region ${nr.region}, 2 accounts visible)\n` +
-        "MCP: available — run `compozy mcp auth login newrelic` to give agents the official New Relic tools"
+        "MCP: available (7 tools exposed via API key; 2 OAuth-only hidden) — agents can use ext__newrelic__mcp_tools / mcp_call"
     );
-    const mcp = nr.requests.find(request => request.path === "/mcp/");
-    assert.equal(mcp?.headers["api-key"], FAKE_KEY);
-    assert.equal((mcp?.body as { method?: string }).method, "initialize");
+    assert.deepEqual(nr.mcpFake.requests.map(request => request.method), ["initialize", "notifications/initialized", "tools/list"]);
+    assert.ok(nr.mcpFake.requests.every(request => request.headers["api-key"] === FAKE_KEY));
     nr.mcp = { status: 403 };
     assert.match(String(await call("doctor", {})), /MCP: unavailable \(403 from http:\/\/127\.0\.0\.1:\d+\/mcp\/\)/);
   });
@@ -95,7 +94,8 @@ describe("tools and doctor against the fake NerdGraph and MCP", () => {
     await new Promise(resolve => setTimeout(resolve, 50));
     assert.deepEqual(lines, ["newrelic: probe region=us nerdgraph=ok mcp=available\n"]);
     assert.ok(!lines.join("").includes(FAKE_KEY));
-    assert.deepEqual(nr.requests.map(request => request.path).sort(), ["/graphql", "/mcp/"]);
+    assert.deepEqual([...new Set(nr.requests.map(request => request.path))].sort(), ["/graphql", "/mcp/"]);
+    assert.ok(!nr.mcpFake.requests.some(request => request.method === "tools/call"));
   });
 
   test("IT-012 tools: the per-call budget ends a slow call with tool budget exceeded (review R-5)", async () => {

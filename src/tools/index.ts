@@ -4,9 +4,11 @@ import { formatReport, runDoctor } from "../doctor.ts";
 import { asObject, parseRegion } from "../params.ts";
 import { toolError } from "./format.ts";
 import { alertIssuesTool, listAccountsTool, searchEntitiesTool } from "./graph-tools.ts";
+import { mcpCallTool, mcpToolsTool } from "./mcp-proxy.ts";
 import { errorGroupsTool, nrqlQueryTool, recentLogsTool } from "./nrql-tools.ts";
 import { nerdgraphTool, REGION_PROPERTY, type ToolDefinition, type ToolDeps } from "./tool.ts";
 
+export { createProxyCatalog } from "./mcp-proxy.ts";
 export type { ToolDeps } from "./tool.ts";
 
 /** Operator probe; model-visible only because SDK tools always are (ADR-002). */
@@ -35,6 +37,8 @@ export const TOOLS: ToolDefinition[] = [
   nerdgraphTool(alertIssuesTool),
   nerdgraphTool(errorGroupsTool),
   nerdgraphTool(recentLogsTool),
+  mcpToolsTool,
+  mcpCallTool,
   doctorTool,
 ];
 

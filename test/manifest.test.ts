@@ -12,7 +12,7 @@ import { MCP_SERVERS, mcpServersToml } from "../src/mcp-servers.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const KINDS = ["errors", "issues", "logs", "nrql"];
-const TOOL_IDS = ["alert_issues", "doctor", "error_groups", "list_accounts", "nrql_query", "recent_logs", "search_entities"].map(
+const TOOL_IDS = ["alert_issues", "doctor", "error_groups", "list_accounts", "mcp_call", "mcp_tools", "nrql_query", "recent_logs", "search_entities"].map(
   name => `ext__newrelic__${name}`
 );
 
@@ -26,6 +26,7 @@ function assertDescribe(payload: Describe): void {
   assert.deepEqual((payload.heartbeat_source_kinds ?? []).map(kind => kind.kind).sort(), KINDS);
   const tools = payload.tools ?? [];
   assert.deepEqual(tools.map(tool => tool.id).sort(), TOOL_IDS);
+  assert.deepEqual(tools.filter(tool => tool.risk !== "read" || tool.read_only !== true).map(tool => tool.id), []);
   assert.deepEqual(
     tools.filter(tool => tool.command).map(tool => [tool.id, tool.command?.verb]),
     [["ext__newrelic__doctor", "doctor"]]
@@ -41,7 +42,7 @@ const AUTH = {
 };
 
 describe("manifest", () => {
-  test("UT-110 manifest: describe carries exactly the 0.7.0 floor, the key env, 4 kinds, 7 tools and the doctor command", () => {
+  test("UT-110 manifest: describe carries exactly the 0.7.0 floor, the key env, 4 kinds, 9 tools (incl. the MCP proxy) and the doctor command", () => {
     const payload = createExtension().describe();
     assertDescribe(payload);
   });

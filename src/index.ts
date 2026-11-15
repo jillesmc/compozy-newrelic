@@ -5,7 +5,7 @@ import { Extension, type ExtensionOptions } from "@compozy/extension-sdk";
 import { startupProbe } from "./doctor.ts";
 import { createPollHandler, type PollDeps } from "./poll.ts";
 import { SOURCES } from "./sources/index.ts";
-import { toolHandler, TOOLS, type ToolDeps } from "./tools/index.ts";
+import { createProxyCatalog, toolHandler, TOOLS, type ToolDeps } from "./tools/index.ts";
 
 export const EXTENSION_VERSION = "0.1.0";
 /**
@@ -46,9 +46,12 @@ export function createExtension(options: ExtensionOptions = {}, deps: NewRelicEx
       createPollHandler(source, { ...deps, env })
     );
   }
+  // One MCP catalog per process, shared by mcp_tools and mcp_call (TTL cache, OAuth-only set).
+  const toolDeps: ToolDeps = { ...deps, env };
+  toolDeps.mcp ??= createProxyCatalog(toolDeps);
   for (const tool of TOOLS) {
     const { name, description, inputSchema, command } = tool;
-    extension.tool(name, { description, inputSchema, readOnly: true, ...(command ? { command } : {}) }, toolHandler(tool, { ...deps, env }));
+    extension.tool(name, { description, inputSchema, readOnly: true, ...(command ? { command } : {}) }, toolHandler(tool, toolDeps));
   }
   // One probe line at start (US-010.AC-2); onReady never runs in __describe mode and never blocks startup.
   extension.onReady(() => void startupProbe({ ...deps, env }));

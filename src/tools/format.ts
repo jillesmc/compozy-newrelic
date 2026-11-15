@@ -14,6 +14,7 @@ export function toolError(error: unknown): RPCError {
   if (error instanceof SourceError) {
     return new RPCError(-32000, error.message, { code: String(error.data?.code ?? "").replace(/^source_/, "") });
   }
+  if (error instanceof RPCError) return error; // already a tool error (MCP proxy codes)
   return new RPCError(-32000, "New Relic tool failed unexpectedly", { code: "extension_failed" });
 }
 

@@ -43,7 +43,7 @@ export function violations(text: string): string[] {
 }
 
 describe("determinism (static)", () => {
-  test("UT-123 static: no source or engine code path reaches an MCP client, the doctor probe, or an AI endpoint", () => {
+  test("UT-123 static: no source or engine code path reaches an MCP client (mcp-client, mcp-catalog), the doctor probe, or an AI endpoint", () => {
     const files = sourceFiles();
     assert.ok(files.some(file => file.endsWith("nrql.ts")));
     for (const file of files) {
@@ -54,6 +54,10 @@ describe("determinism (static)", () => {
   test("UT-123 static: the scanner flags each forbidden form", () => {
     assert.deepEqual(violations('import { probeMcp } from "../doctor.ts";\nawait probeMcp();'), ["import ../doctor.ts", "MCP client or probe"]);
     assert.deepEqual(violations('import { x } from "openai";'), ["import openai"]);
+    // Business Rule 9 (v0.2): the MCP proxy client and catalog are out of reach of sources and the engine.
+    assert.deepEqual(violations('import { createMcpClient } from "../mcp-client.ts";'), ["import ../mcp-client.ts"]);
+    assert.deepEqual(violations('import type { McpCatalog } from "./mcp-catalog.ts";'), ["import ./mcp-catalog.ts"]);
+    assert.deepEqual(violations('const { callTool } = await import("../tools/mcp-proxy.ts");'), ["import ../tools/mcp-proxy.ts", "MCP client or probe"]);
     assert.deepEqual(violations("await client.callTool('natural_language_to_nrql_query');"), ["AI endpoint"]);
     assert.deepEqual(violations("await fetch(url);"), ["direct network access (sources use the injected NerdGraph client)"]);
     assert.deepEqual(violations("const t = Date.now();"), ["wall clock, randomness or locale"]);

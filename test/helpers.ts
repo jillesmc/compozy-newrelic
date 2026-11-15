@@ -143,15 +143,21 @@ export const ALLOWED_TOOL_CODES = ["tool_invalid_input", "tool_denied", "tool_un
 
 /**
  * Decodes a tool error (Deviation D-18): `data` must be exactly a CompozyOS ToolError
- * `{code: tool_*, message}` whose message is `<extension code>[ (<reason>)]: <text>`. Returns the
+ * `{code: tool_*, message, operator: {cause, recovery}}` whose message (= cause) is
+ * `<extension code>[ (<reason>)]: <text>` and whose recovery is non-empty. Returns the
  * extension code, reason and text, plus the tool_* code as `toolCode`.
  */
 export function decodeToolError(error: unknown): { toolCode: string; code: string; reason?: string; message: string } {
   const rpc = error as { message: string; data?: Record<string, unknown> };
   const data = rpc.data ?? {};
-  assert.deepEqual(Object.keys(data).sort(), ["code", "message"]);
+  assert.deepEqual(Object.keys(data).sort(), ["code", "message", "operator"]);
   assert.ok(ALLOWED_TOOL_CODES.includes(String(data.code)), String(data.code));
   assert.equal(data.message, rpc.message);
+  // CompozyOS shows agents only operator.cause and operator.recovery, kept when both are non-empty.
+  const operator = data.operator as { cause?: unknown; recovery?: unknown };
+  assert.deepEqual(Object.keys(operator).sort(), ["cause", "recovery"]);
+  assert.equal(operator.cause, data.message);
+  assert.ok(typeof operator.recovery === "string" && operator.recovery.trim().length > 0);
   const match = /^(\w+)(?: \((\w+)\))?: ([\s\S]+)$/.exec(String(data.message));
   assert.ok(match, String(data.message));
   return { toolCode: String(data.code), code: match[1]!, ...(match[2] ? { reason: match[2] } : {}), message: match[3]! };

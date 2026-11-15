@@ -410,23 +410,41 @@ S2 and S3 can run in parallel after S1.
     error became generic.
   - `internal/mcp/executor_redaction.go:134-160` then preserves a ToolError's code and message for
     hosted MCP clients.
-  - `reason_codes` must be documented values (`internal/tools/reason.go:321-326`), so the extension
-    sends none.
+  - `reason_codes` must be documented values (`internal/tools/reason.go:217,321-326`), and the
+    hosted text puts `reason_codes[0]` where the code goes, so the extension sends none.
+  - Repair R2 (live E2E after R1): public transports never show `ToolError.message`.
+    `internal/api/core/tool_errors.go:150-156` replaces it with `safeToolErrorMessage(code)` unless
+    `PublicMessage` is set, and `PublicMessage` is `json:"-"`. Agents saw `tool_denied: tool
+    invocation denied` and `tool_backend_failed: tool backend failed`.
+  - What does reach agents is `operator` (`internal/tools/operator_failure.go:6-9`:
+    `{cause, recovery}`). `tool_runtime.go:126-132` keeps it only when both are non-empty after
+    trimming. `contract.ToolOperatorFailureDetails` (`internal/api/contract/tools.go:249-265`) puts
+    it into the response details as `operator_cause` / `operator_recovery`.
+    `internal/mcp/hosted_proxy_transport_error.go:62-90` appends them to the hosted MCP error text
+    as `\nCause: …` and `\nRecovery: …`, after `executor_redaction.go:155-159` has redacted them.
 
   Change: only the tool path changes, in `toolError` in `src/tools/format.ts`, where every tool
   handler failure is converted. The JSON-RPC error is -32000. Its message and `data.message` are both
   `<extension code>[ (<reason>)]: <text>`, bounded to 1000 characters; texts are already redacted
-  (BR-7). `data` is exactly `{code, message}`, with `code` mapped as follows:
+  (BR-7). `data` is exactly `{code, message, operator: {cause, recovery}}`. `operator.cause` equals
+  `message`. `operator.recovery` is a short, non-empty next step, bounded to 1000 characters. `code`
+  and `recovery` are mapped as follows:
 
-  | Extension code | `data.code` |
-  | --- | --- |
-  | `params_invalid` | `tool_invalid_input` |
-  | `mcp_tool_not_exposed` (reason `oauth_only`, `not_read_only`, `unknown_tool`) | `tool_denied` |
-  | `mcp_unavailable`, `credential_absent`, `credential_expired`, `rate_limited` | `tool_unavailable` |
-  | `extension_failed`, `mcp_request_failed` with `no answer within`, `budget exceeded` or `timed out` | `tool_timed_out` |
-  | `mcp_request_failed`, `extension_failed`, anything else | `tool_backend_failed` |
+  | Extension code | `data.code` | `operator.recovery` |
+  | --- | --- | --- |
+  | `params_invalid` | `tool_invalid_input` | `fix the named parameter and call the tool again` |
+  | `mcp_tool_not_exposed (oauth_only)` | `tool_denied` | `sign in with compozy mcp auth login newrelic or use another ext__newrelic__mcp_tools tool` (`newrelic-eu` for `eu`) |
+  | `mcp_tool_not_exposed (not_read_only \| unknown_tool)` | `tool_denied` | `call ext__newrelic__mcp_tools to list callable tools` |
+  | `mcp_unavailable` | `tool_unavailable` | `use the ext__newrelic__* NerdGraph tools` |
+  | `credential_absent` | `tool_unavailable` | `run compozy extension secrets set newrelic --env NEW_RELIC_API_KEY` |
+  | `credential_expired` | `tool_unavailable` | `bind a User API key (NRAK-...) with compozy extension secrets set newrelic --env NEW_RELIC_API_KEY` |
+  | `rate_limited` | `tool_unavailable` | `retry later` |
+  | `extension_failed`, `mcp_request_failed` with `no answer within`, `budget exceeded` or `timed out` | `tool_timed_out` | `retry with a narrower query or time window` |
+  | `mcp_request_failed`, `extension_failed`, anything else | `tool_backend_failed` | `retry later; if it keeps failing, run compozy extension exec newrelic --cmd doctor` |
 
-  Example: `{code: "tool_denied", message: "mcp_tool_not_exposed (oauth_only): natural_language_to_nrql_query requires OAuth; …"}`.
+  Example of `data`: `{code: "tool_denied", message: "mcp_tool_not_exposed (oauth_only): natural_language_to_nrql_query requires OAuth; …", operator: {cause: <same as message>, recovery: "sign in with compozy mcp auth login newrelic or use another ext__newrelic__mcp_tools tool"}}`.
+  An agent on the hosted MCP sees `tool_denied: tool invocation denied`, then `Cause: …`, then
+  `Recovery: …`.
   The `mcp_request_failed` text no longer repeats the code inside the message, because the prefix
   now carries it. Check-in source errors keep `data.code = source_*` (v0.1 contract), so `poll.ts`
   and `errors.ts` are unchanged. The README error tables show what agents see.

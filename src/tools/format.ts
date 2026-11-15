@@ -18,26 +18,45 @@ const TOOL_CODES: Record<string, string> = {
   rate_limited: "tool_unavailable",
 };
 const TIMEOUT = /no answer within|budget exceeded|timed out/i;
+const DOCTOR = "compozy extension exec newrelic --cmd doctor";
+/** Next step per extension code; an error may carry its own `data.recovery` (proxy refusals). */
+const RECOVERY: Record<string, string> = {
+  params_invalid: "fix the named parameter and call the tool again",
+  mcp_tool_not_exposed: "call ext__newrelic__mcp_tools to list callable tools",
+  mcp_unavailable: "use the ext__newrelic__* NerdGraph tools",
+  credential_absent: "run compozy extension secrets set newrelic --env NEW_RELIC_API_KEY",
+  credential_expired: "bind a User API key (NRAK-...) with compozy extension secrets set newrelic --env NEW_RELIC_API_KEY",
+  rate_limited: "retry later",
+};
+const TIMEOUT_RECOVERY = "retry with a narrower query or time window";
+const BACKEND_RECOVERY = `retry later; if it keeps failing, run ${DOCTOR}`;
 const MAX_ERROR_CHARS = 1000;
 
 /**
- * Tool failure: JSON-RPC -32000 whose `data` is a CompozyOS ToolError `{code, message}`. The message
- * starts with the extension code (and the refusal reason) so the `_dx.md` texts stay recognizable:
- * `tool_denied` + `mcp_tool_not_exposed (oauth_only): <text>`. Source errors keep `source_*` (poll.ts).
+ * Tool failure: JSON-RPC -32000 whose `data` is a CompozyOS ToolError
+ * `{code: tool_*, message, operator: {cause, recovery}}` (Deviation D-18). CompozyOS shows agents the
+ * code, a generic text, and `operator.cause` / `operator.recovery`; the cause is the extension code
+ * (and refusal reason) plus the `_dx.md` text: `mcp_tool_not_exposed (oauth_only): <text>`. Source
+ * errors keep `source_*` (poll.ts).
  */
 export function toolError(error: unknown): RPCError {
   let code = "extension_failed";
   let reason: unknown;
+  let recovery: unknown;
   let text = "New Relic tool failed unexpectedly";
   if (error instanceof RPCError) {
-    const data = (error.data ?? {}) as { code?: unknown; reason?: unknown };
+    const data = (error.data ?? {}) as { code?: unknown; reason?: unknown; recovery?: unknown };
     code = String(data.code ?? code).replace(/^source_/, "");
     reason = data.reason;
+    recovery = data.recovery;
     text = error.message;
   }
-  const toolCode = TOOL_CODES[code] ?? (TIMEOUT.test(text) ? "tool_timed_out" : "tool_backend_failed");
+  const timedOut = TIMEOUT.test(text);
+  const toolCode = TOOL_CODES[code] ?? (timedOut ? "tool_timed_out" : "tool_backend_failed");
   const message = truncateChars(`${code}${typeof reason === "string" ? ` (${reason})` : ""}: ${text}`, MAX_ERROR_CHARS);
-  return new RPCError(-32000, message, { code: toolCode, message });
+  const next = typeof recovery === "string" && recovery.trim() ? recovery : RECOVERY[code] ?? (timedOut ? TIMEOUT_RECOVERY : BACKEND_RECOVERY);
+  const operator = { cause: message, recovery: truncateChars(next, MAX_ERROR_CHARS) };
+  return new RPCError(-32000, message, { code: toolCode, message, operator });
 }
 
 /** Flattens a NerdGraph value into one compact cell (objects/arrays as JSON), ≤ 300 characters. */

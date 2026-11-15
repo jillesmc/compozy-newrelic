@@ -414,16 +414,23 @@ default, or `eu`).
 Without a bound key, the investigation and proxy tools return a `credential_absent` error that
 names the secrets command, and they make no network call.
 
-Tool errors reach agents as `<tool code>: <extension code>: <message>`. CompozyOS 0.7.0 keeps an
-extension's error text only under its own `tool_*` codes; the messages are those of the source
-[Errors](#errors) table:
+Tool errors reach agents as three lines: the CompozyOS code with its fixed text, then `Cause:` (the
+extension code and message from the source [Errors](#errors) table), then `Recovery:`. For example:
 
-| Extension code | Tool code | Example |
+```text
+tool_unavailable: tool unavailable
+Cause: credential_absent: New Relic API key missing; run compozy extension secrets set newrelic --env NEW_RELIC_API_KEY
+Recovery: run compozy extension secrets set newrelic --env NEW_RELIC_API_KEY
+```
+
+| Cause starts with | First line | Recovery |
 | --- | --- | --- |
-| `credential_absent`, `credential_expired`, `rate_limited` | `tool_unavailable` | `tool_unavailable: credential_absent: New Relic API key missing; run compozy extension secrets set newrelic --env NEW_RELIC_API_KEY` |
-| `params_invalid` | `tool_invalid_input` | `tool_invalid_input: params_invalid: New Relic rejected the query: <message>` |
-| `extension_failed` (timeout, tool budget of 25 s) | `tool_timed_out` | `tool_timed_out: extension_failed: New Relic request failed: tool budget exceeded` |
-| `extension_failed` (5xx, network) | `tool_backend_failed` | `tool_backend_failed: extension_failed: New Relic request failed: network error` |
+| `credential_absent` | `tool_unavailable: tool unavailable` | `run compozy extension secrets set newrelic --env NEW_RELIC_API_KEY` |
+| `credential_expired` | `tool_unavailable: tool unavailable` | `bind a User API key (NRAK-...) with compozy extension secrets set newrelic --env NEW_RELIC_API_KEY` |
+| `rate_limited` | `tool_unavailable: tool unavailable` | `retry later` |
+| `params_invalid` | `tool_invalid_input: invalid tool request` | `fix the named parameter and call the tool again` |
+| `extension_failed` (timeout, or the 25 s tool budget) | `tool_timed_out: tool call timed out` | `retry with a narrower query or time window` |
+| `extension_failed` (5xx, network) | `tool_backend_failed: tool backend failed` | `retry later; if it keeps failing, run compozy extension exec newrelic --cmd doctor` |
 
 ## Plan matrix
 
@@ -483,22 +490,29 @@ disappear within 10 minutes, without an extension release.
 
 Refusals and errors:
 
-Agents see `<tool code>: <extension code>[ (<reason>)]: <message>`. The tool code is the CompozyOS
-error class; the extension code and the message identify the case:
+Agents see the CompozyOS code with its fixed text, then `Cause:` and `Recovery:` lines. For example:
 
-| Condition | What the agent sees |
-| --- | --- |
-| OAuth-only tool (seeded or learned) | `tool_denied: mcp_tool_not_exposed (oauth_only): natural_language_to_nrql_query requires OAuth; sign in with compozy mcp auth login newrelic or use another tool` (`newrelic-eu` for `eu`) |
-| Tool not marked read-only, or destructive | `tool_denied: mcp_tool_not_exposed (not_read_only): <tool> is not marked read-only by New Relic; the proxy does not call it` |
-| Unknown or removed tool | `tool_denied: mcp_tool_not_exposed (unknown_tool): <tool> is not in the New Relic MCP catalog for region us` |
-| MCP unavailable for the key | `tool_unavailable: mcp_unavailable: New Relic MCP unavailable for this API key (403); use the ext__newrelic__* NerdGraph tools` |
-| Key not bound | `tool_unavailable: credential_absent: …` (same text as the other tools; no network call) |
-| 401 | `tool_unavailable: credential_expired: New Relic rejected the API key; bind a User API key (NRAK-...)` |
-| 429 | `tool_unavailable: rate_limited: New Relic rate limit reached; retry later` |
-| Bad `tool`, `arguments` (over 64 KiB) or `limit` | `tool_invalid_input: params_invalid: <what to fix>` |
-| Timeout | `tool_timed_out: mcp_request_failed: no answer within 60s` (10s for other requests) |
-| 5xx or network error | `tool_backend_failed: mcp_request_failed: <status or error>` |
-| Remote tool error | not an error: the result has `is_error: true` and `text` = the remote message |
+```text
+tool_denied: tool invocation denied
+Cause: mcp_tool_not_exposed (oauth_only): natural_language_to_nrql_query requires OAuth; sign in with compozy mcp auth login newrelic or use another tool
+Recovery: sign in with compozy mcp auth login newrelic or use another ext__newrelic__mcp_tools tool
+```
+
+| Condition | First line | Cause | Recovery |
+| --- | --- | --- | --- |
+| OAuth-only tool (seeded or learned) | `tool_denied: tool invocation denied` | `mcp_tool_not_exposed (oauth_only): natural_language_to_nrql_query requires OAuth; sign in with compozy mcp auth login newrelic or use another tool` | `sign in with compozy mcp auth login newrelic or use another ext__newrelic__mcp_tools tool` (`newrelic-eu` for `eu`) |
+| Tool not marked read-only, or destructive | `tool_denied: tool invocation denied` | `mcp_tool_not_exposed (not_read_only): <tool> is not marked read-only by New Relic; the proxy does not call it` | `call ext__newrelic__mcp_tools to list callable tools` |
+| Unknown or removed tool | `tool_denied: tool invocation denied` | `mcp_tool_not_exposed (unknown_tool): <tool> is not in the New Relic MCP catalog for region us` | `call ext__newrelic__mcp_tools to list callable tools` |
+| MCP unavailable for the key | `tool_unavailable: tool unavailable` | `mcp_unavailable: New Relic MCP unavailable for this API key (403); use the ext__newrelic__* NerdGraph tools` | `use the ext__newrelic__* NerdGraph tools` |
+| Key not bound | `tool_unavailable: tool unavailable` | `credential_absent: …` (same as the other tools; no network call) | `run compozy extension secrets set newrelic --env NEW_RELIC_API_KEY` |
+| 401 | `tool_unavailable: tool unavailable` | `credential_expired: New Relic rejected the API key; bind a User API key (NRAK-...)` | `bind a User API key (NRAK-...) with compozy extension secrets set …` |
+| 429 | `tool_unavailable: tool unavailable` | `rate_limited: New Relic rate limit reached; retry later` | `retry later` |
+| Bad `tool`, `arguments` (over 64 KiB) or `limit` | `tool_invalid_input: invalid tool request` | `params_invalid: <what to fix>` | `fix the named parameter and call the tool again` |
+| Timeout | `tool_timed_out: tool call timed out` | `mcp_request_failed: no answer within 60s` (10s for other requests) | `retry with a narrower query or time window` |
+| 5xx or network error | `tool_backend_failed: tool backend failed` | `mcp_request_failed: <status or error>` | `retry later; if it keeps failing, run compozy extension exec newrelic --cmd doctor` |
+
+A remote tool error is not a tool error: the result has `is_error: true`, and `text` is the remote
+message.
 
 Refusals send no request, and an OAuth-only tool is refused even before the catalog loads. When
 `initialize` answers 403 or 404 the region is `unavailable` and is probed again after 10 minutes;

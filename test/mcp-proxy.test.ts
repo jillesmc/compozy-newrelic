@@ -220,7 +220,7 @@ describe("MCP proxy (unit, fake MCP)", () => {
       assert.ok(!text.includes(FAKE_KEY));
     }
   });
-  test("UT-191 tool errors: data is a CompozyOS ToolError {code: tool_*, message: '<extension code>: ...'} (D-18)", async () => {
+  test("UT-191 tool errors: data is a CompozyOS ToolError {code: tool_*, message, operator: {cause, recovery}} (D-18)", async () => {
     const data = async (promise: Promise<unknown>) => {
       try {
         await promise;
@@ -231,35 +231,63 @@ describe("MCP proxy (unit, fake MCP)", () => {
       }
       throw new Error("expected a tool error");
     };
-    // (a) an mcp_call oauth_only refusal (UT-150 tool error data)
-    assert.deepEqual(await data(h.call("mcp_call", { tool: "natural_language_to_nrql_query" })), {
-      code: "tool_denied",
-      message:
+    const shape = (code: string, message: string, recovery: string) => ({ code, message, operator: { cause: message, recovery } });
+    const DOCTOR = "retry later; if it keeps failing, run compozy extension exec newrelic --cmd doctor";
+    // (a) mcp_call refusals (UT-150/UT-151 tool error data)
+    assert.deepEqual(
+      await data(h.call("mcp_call", { tool: "natural_language_to_nrql_query" })),
+      shape(
+        "tool_denied",
         "mcp_tool_not_exposed (oauth_only): natural_language_to_nrql_query requires OAuth; sign in with compozy mcp auth login newrelic or use another tool",
-    });
+        "sign in with compozy mcp auth login newrelic or use another ext__newrelic__mcp_tools tool"
+      )
+    );
+    assert.equal(
+      ((await data(h.call("mcp_call", { tool: "search_traces", region: "eu" }))) as { operator: { recovery: string } }).operator.recovery,
+      "sign in with compozy mcp auth login newrelic-eu or use another ext__newrelic__mcp_tools tool"
+    );
     // (c) a params error and a v0.1 tool without a key
-    assert.deepEqual(await data(h.call("mcp_tools", { limit: 61 })), {
-      code: "tool_invalid_input",
-      message: "params_invalid: limit must be an integer from 1 to 60",
-    });
+    assert.deepEqual(
+      await data(h.call("mcp_tools", { limit: 61 })),
+      shape("tool_invalid_input", "params_invalid: limit must be an integer from 1 to 60", "fix the named parameter and call the tool again")
+    );
     const noKey = toolHandler(TOOLS.find(tool => tool.name === "nrql_query")!, { env: {} });
-    assert.deepEqual(await data(Promise.resolve(noKey({ input: { account_id: 1, nrql: "SELECT 1" } } as never))), {
-      code: "tool_unavailable",
-      message: "credential_absent: New Relic API key missing; run compozy extension secrets set newrelic --env NEW_RELIC_API_KEY",
-    });
+    assert.deepEqual(
+      await data(Promise.resolve(noKey({ input: { account_id: 1, nrql: "SELECT 1" } } as never))),
+      shape(
+        "tool_unavailable",
+        "credential_absent: New Relic API key missing; run compozy extension secrets set newrelic --env NEW_RELIC_API_KEY",
+        "run compozy extension secrets set newrelic --env NEW_RELIC_API_KEY"
+      )
+    );
     // (d) mcp_request_failed on the probe, then (b) mcp_unavailable within the retry minute
     h.nr.mcpFake.status = 502;
-    assert.deepEqual(await data(h.call("mcp_tools")), { code: "tool_backend_failed", message: "mcp_request_failed: HTTP 502" });
-    assert.deepEqual(await data(h.call("mcp_call", { tool: "list_recent_issues" })), {
-      code: "tool_unavailable",
-      message: "mcp_unavailable: New Relic MCP unavailable for this API key (502); use the ext__newrelic__* NerdGraph tools",
-    });
+    assert.deepEqual(await data(h.call("mcp_tools")), shape("tool_backend_failed", "mcp_request_failed: HTTP 502", DOCTOR));
+    assert.deepEqual(
+      await data(h.call("mcp_call", { tool: "list_recent_issues" })),
+      shape(
+        "tool_unavailable",
+        "mcp_unavailable: New Relic MCP unavailable for this API key (502); use the ext__newrelic__* NerdGraph tools",
+        "use the ext__newrelic__* NerdGraph tools"
+      )
+    );
     assert.equal(h.nr.mcpFake.requests.length, 1);
+    // after the minute, the now-loaded region refuses not-read-only and unknown tools
+    h.nr.mcpFake.status = 0;
+    h.advance(RETRY_MS);
+    assert.deepEqual(
+      await data(h.call("mcp_call", { tool: "delete_dashboard" })),
+      shape(
+        "tool_denied",
+        "mcp_tool_not_exposed (not_read_only): delete_dashboard is not marked read-only by New Relic; the proxy does not call it",
+        "call ext__newrelic__mcp_tools to list callable tools"
+      )
+    );
     // a v0.1 network failure stays a backend failure with its message
     const down = toolHandler(TOOLS.find(tool => tool.name === "nrql_query")!, { env: { NEW_RELIC_API_KEY: FAKE_KEY } });
-    assert.deepEqual(await data(Promise.resolve(down({ input: { account_id: 1, nrql: "SELECT 1", region: "loopback:9" } } as never))), {
-      code: "tool_backend_failed",
-      message: "extension_failed: New Relic request failed: network error",
-    });
+    assert.deepEqual(
+      await data(Promise.resolve(down({ input: { account_id: 1, nrql: "SELECT 1", region: "loopback:9" } } as never))),
+      shape("tool_backend_failed", "extension_failed: New Relic request failed: network error", DOCTOR)
+    );
   });
 });

@@ -52,7 +52,9 @@ function refusal(tool: string, reason: HiddenReason, region: Region): RPCError {
       : reason === "not_read_only"
         ? `${tool} is not marked read-only by New Relic; the proxy does not call it`
         : `${tool} is not in the New Relic MCP catalog for region ${region}`;
-  return mcpToolError("mcp_tool_not_exposed", message, { reason });
+  // Recovery for oauth_only names the region's OAuth server; the others use the default (format.ts).
+  const recovery = `sign in with compozy mcp auth login ${server} or use another ext__newrelic__mcp_tools tool`;
+  return mcpToolError("mcp_tool_not_exposed", message, { reason, ...(reason === "oauth_only" ? { recovery } : {}) });
 }
 
 /** Resolves the key (no network when absent) and the shared catalog. */

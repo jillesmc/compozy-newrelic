@@ -526,3 +526,10 @@ S2 and S3 can run in parallel after S1.
      non-JSON text, or text that differs, is kept. The `mcp_call` description advises a time window
      (`start_time_ms`) for list tools, because the official server rejects results over its own
      10,000-token limit.
+- **D-22 (2026-11-16, found in the live E2E, recorded before coding): exact numbers in item text.**
+  Item titles and summaries formatted every number with 6 significant digits, so large integers
+  (counts, epoch timestamps) were rounded. A breach could read `above 1794790000000:
+  1794790000000` while the attributes held 1794789958000 and 1794790032448. Integers now print
+  exactly; non-integers of magnitude ≥ 100000 print with at most 2 decimals; smaller values keep 6
+  significant digits. When the NRQL breach text would show the threshold and the value as equal
+  although they differ, both print exactly. Attributes are unchanged (always exact).

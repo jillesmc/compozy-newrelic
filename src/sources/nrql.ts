@@ -169,7 +169,12 @@ function nrqlItem(
   context: Pick<SourceContext, "endpoints" | "redact">
 ) {
   const facetText = read.facet ? read.facet.join("/") : null;
-  const breach = `${params.condition} ${formatNumber(params.threshold)}: ${formatNumber(value)}`;
+  // D-22: never show a threshold and a different value as the same number.
+  const [shownThreshold, shownValue] =
+    formatNumber(params.threshold) === formatNumber(value) && params.threshold !== value
+      ? [String(params.threshold), String(value)]
+      : [formatNumber(params.threshold), formatNumber(value)];
+  const breach = `${params.condition} ${shownThreshold}: ${shownValue}`;
   const title = facetText
     ? `${facetText} ${breach} (${read.label}, account ${params.accountId})`
     : `${read.label} ${breach} (account ${params.accountId})`;

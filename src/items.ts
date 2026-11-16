@@ -26,6 +26,9 @@ export function redactDeep<T>(value: T, redact: (text: string) => string): T {
 
 /** Locale-free fixed formatting: at most 6 significant digits, no exponent below 1e21. */
 export function formatNumber(value: number): string {
+  // D-22: integers (counts, epoch timestamps) print exactly; large fractions keep 2 decimals.
+  if (Number.isInteger(value)) return String(value);
+  if (Math.abs(value) >= 100_000) return String(Math.round(value * 100) / 100);
   return String(Number(value.toPrecision(6)));
 }
 

@@ -30,7 +30,7 @@ official MCP. The extension has nine tools including the doctor, and never write
 Install it for all projects:
 
 ```bash
-compozy extension install github:jillesmc/compozy-newrelic@v0.2.2 --allow-unverified --yes
+compozy extension install github:jillesmc/compozy-newrelic@v0.2.3 --allow-unverified --yes
 ```
 
 Without `--scope` the install is global: the packaged MCP servers default to global scope (v0.1.0

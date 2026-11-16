@@ -3,7 +3,7 @@ import { describe, test } from "node:test";
 
 import type { HeartbeatSourceResult } from "@compozy/extension-sdk";
 
-import { redactor } from "../src/items.ts";
+import { formatNumber, redactor } from "../src/items.ts";
 import { regionEndpoints } from "../src/nerdgraph.ts";
 import { KEY_PATTERN } from "../src/normalize.ts";
 import { facetFields, nrqlSource, parseNrqlParams } from "../src/sources/nrql.ts";
@@ -84,6 +84,20 @@ describe("newrelic/nrql", () => {
     const single = await poll([{ "percentile.duration": { "95": 2.31 } }]);
     assert.deepEqual(keysOf(single), ["all"]); // Deviation D-2: the daemon rejects "_"
     assert.equal(single.items[0]?.title, `p95 duration above 1.5: 2.31 (account ${ACCOUNT})`);
+  });
+
+  test("UT-034 nrql: large numbers print exactly and a threshold never reads equal to a different value (D-22)", async () => {
+    assert.equal(formatNumber(1794790032448), "1794790032448");
+    assert.equal(formatNumber(2554), "2554");
+    assert.equal(formatNumber(123456.789), "123456.79");
+    assert.equal(formatNumber(2.3123456789), "2.31235");
+    const threshold = 1794789958000;
+    const raw = { account_id: ACCOUNT, nrql: "SELECT latest(timestamp) FROM Transaction FACET appName", threshold };
+    const state = { v: 1, fp: parseNrqlParams(raw).fingerprint, active: [] };
+    const result = await poll([{ facet: "api", appName: "api", "latest.timestamp": 1794790032448 }], state, raw);
+    assert.equal(result.items[0]?.title, `api above 1794789958000: 1794790032448 (latest.timestamp, account ${ACCOUNT})`);
+    const close = await poll([p95("api", 1.5000001)], undefined, BASE);
+    assert.match(close.items[0]!.title, /above 1\.5: 1\.5000001 /);
   });
 
   test("UT-033 nrql: the item names facet, value, field and account (US-001 AC-1)", async () => {

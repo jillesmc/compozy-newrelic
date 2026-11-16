@@ -30,7 +30,7 @@ official MCP. The extension has nine tools including the doctor, and never write
 Install it for all projects:
 
 ```bash
-compozy extension install github:jillesmc/compozy-newrelic@v0.2.0 --allow-unverified --yes
+compozy extension install github:jillesmc/compozy-newrelic@v0.2.1 --allow-unverified --yes
 ```
 
 Without `--scope` the install is global: the packaged MCP servers default to global scope (v0.1.0
@@ -630,6 +630,15 @@ manual server and the extension keep separate secrets, so they can coexist while
 - **No JP region.** Only `us` and `eu`.
 - The `aiIssues` field names follow New Relic's public docs and still need a check against a real
   account (D-4).
+
+### Corporate TLS inspection
+
+CompozyOS starts extensions without your shell's `NODE_EXTRA_CA_CERTS`, so the extension trusts the
+operating system CA store itself (Node.js 22.19+ or 24.5+). If your company re-signs New Relic traffic
+(Netskope, Zscaler), install its CA in the OS store (`/usr/local/share/ca-certificates` plus
+`update-ca-certificates` on Debian/Ubuntu, the System keychain on macOS). An untrusted CA shows as
+`New Relic request failed: TLS certificate not trusted (SELF_SIGNED_CERT_IN_CHAIN); install the
+network's CA in the operating system store`.
 
 ## Security notes
 

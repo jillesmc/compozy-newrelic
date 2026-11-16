@@ -1,5 +1,6 @@
 import { sourceError, SourceError } from "./errors.ts";
 import { redactor } from "./items.ts";
+import { networkFailureReason } from "./system-ca.ts";
 
 /** `loopback:<port>` is the always-compiled, undocumented local testing aid (Deviations D-1, D-3). */
 export type Region = "us" | "eu" | `loopback:${number}`;
@@ -84,9 +85,9 @@ export function createNerdGraphClient(
         redirect: "manual", // never resend the key to a redirect target (D-19); a 3xx fails as non-ok
       });
       text = await response.text();
-    } catch {
+    } catch (error) {
       if (signal.aborted) throw signal.reason;
-      const reason = timeout.aborted ? `no answer within ${timeoutMs / 1000}s` : "network error";
+      const reason = timeout.aborted ? `no answer within ${timeoutMs / 1000}s` : networkFailureReason(error);
       throw sourceError("source_extension_failed", `New Relic request failed: ${reason}`);
     }
     const status = response.status;

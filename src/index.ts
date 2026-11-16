@@ -5,9 +5,10 @@ import { Extension, type ExtensionOptions } from "@compozy/extension-sdk";
 import { startupProbe } from "./doctor.ts";
 import { createPollHandler, type PollDeps } from "./poll.ts";
 import { SOURCES } from "./sources/index.ts";
+import { trustSystemCertificates } from "./system-ca.ts";
 import { createProxyCatalog, toolHandler, TOOLS, type ToolDeps } from "./tools/index.ts";
 
-export const EXTENSION_VERSION = "0.2.0";
+export const EXTENSION_VERSION = "0.2.1";
 /**
  * Supported CompozyOS floor. The TS SDK 0.7.0 describe payload still carries its stale built-in floor
  * "0.3.0-beta.1" and `compozy extension build` stamps extension.toml from it, so it is set here.
@@ -61,5 +62,7 @@ export function createExtension(options: ExtensionOptions = {}, deps: NewRelicEx
 
 const entryPoint = process.argv[1];
 if (entryPoint && import.meta.url === pathToFileURL(entryPoint).href) {
+  // Before any request: company hosts behind TLS inspection need the OS CA store.
+  trustSystemCertificates();
   void createExtension().start();
 }

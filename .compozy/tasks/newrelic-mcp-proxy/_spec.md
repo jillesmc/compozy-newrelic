@@ -504,3 +504,11 @@ S2 and S3 can run in parallel after S1.
      instead of `mcp_request_failed`. A repeated 400 `session` error is still `request_failed`. A
      doctor or startup probe that joins a refresh already in flight keeps the authority D-19.7 gives
      it: if the refresh graced a transient failure, the region still becomes `unknown`.
+- **D-20 (2026-11-15, found in E2E with compozy-jira, recorded before coding): trust the OS CA
+  store.** CompozyOS 0.7.1 starts extension subprocesses with a scrubbed environment, so
+  `NODE_EXTRA_CA_CERTS` never reaches the extension. New Relic hosts are not TLS-inspected today, but
+  company traffic is moving behind Netskope, which re-signs hosts with a CA that only the operating
+  system store holds. Startup now adds the OS CA store to Node's default roots
+  (`tls.setDefaultCACertificates`, Node 22.19+/24.5+; older runtimes keep the bundled roots). NerdGraph
+  and MCP request failures name their cause: `TLS certificate not trusted (<code>)` for certificate
+  errors, `network error (<code>)` otherwise. `src/system-ca.ts` owns both; it does no network I/O.

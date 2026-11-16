@@ -1,5 +1,6 @@
 import { redactor } from "./items.ts";
 import { REJECTED_KEY_MESSAGE, regionEndpoints, type Region } from "./nerdgraph.ts";
+import { networkFailureReason } from "./system-ca.ts";
 
 /**
  * Minimal Streamable HTTP MCP client for the official New Relic MCP (spec Core Interfaces): lazy
@@ -101,9 +102,9 @@ export function createMcpClient(region: Region, apiKey: string, options: McpClie
       });
       const text = await readBody(response, typeof message.id === "number" ? message.id : undefined);
       return { status: response.status, text, sessionId: response.headers?.get("mcp-session-id") ?? undefined };
-    } catch {
+    } catch (error) {
       if (signal.aborted) throw signal.reason;
-      throw new McpError("request_failed", timeout.aborted ? `no answer within ${limitMs / 1000}s` : "network error");
+      throw new McpError("request_failed", timeout.aborted ? `no answer within ${limitMs / 1000}s` : networkFailureReason(error));
     }
   }
 

@@ -139,6 +139,25 @@ export const mcpToolsTool: ToolDefinition = {
   },
 };
 
+/** Key-order-insensitive serialization, to compare a text part with the structured result. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/** True when `text` is JSON with exactly the structured result's content. */
+function sameJson(text: string, structured: JSONValue): boolean {
+  try {
+    return canonical(JSON.parse(text)) === canonical(structured);
+  } catch {
+    return false;
+  }
+}
+
 /** One-line stand-in for a non-text content part (Business Rule 6). */
 function placeholder(part: Record<string, unknown>, redact: (text: string) => string): string {
   const resource = part.resource as { uri?: unknown } | undefined;
@@ -150,7 +169,8 @@ export const mcpCallTool: ToolDefinition = {
   name: "mcp_call",
   description:
     "Call one official New Relic MCP tool listed by ext__newrelic__mcp_tools, passing `arguments` per its input. " +
-    "Read-only; the result text is capped at 16 KiB.",
+    "Read-only; the result text is capped at 16 KiB. For list tools pass a time window (such as " +
+    "`start_time_ms`): the official server rejects results over its own 10,000-token limit.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -213,10 +233,12 @@ export const mcpCallTool: ToolDefinition = {
     const structured = remote.structuredContent === undefined ? undefined : (redactDeep(remote.structuredContent, redact) as JSONValue);
     const structuredFits = structured !== undefined && byteLength(JSON.stringify(structured)) <= MAX_MCP_TEXT_BYTES;
     const truncated = text !== full || (structured !== undefined && !structuredFits);
+    // D-21.2: a text part that only repeats the structured result would double every call's tokens.
+    const textRepeatsStructured = structuredFits && text === full && sameJson(full, structured!);
     const output: Record<string, JSONValue> = {
       tool: name,
       is_error: remote.isError === true,
-      text,
+      ...(textRepeatsStructured ? {} : { text }),
       ...(structuredFits ? { structured: structured! } : {}),
       truncated,
     };

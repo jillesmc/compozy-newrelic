@@ -4,6 +4,7 @@ import { fingerprint, sortRows, transition, type Signal } from "../engine.ts";
 import { paramsError } from "../errors.ts";
 import { epochMs, fetchIssuePages, issuesQuery as sharedIssuesQuery, type IssueFilter } from "../issue-query.ts";
 import { redactDeep, shapeItem } from "../items.ts";
+import { issueUrl } from "../nerdgraph.ts";
 import { sanitizeKey } from "../normalize.ts";
 import { asObject, COMMON_PROPERTIES, parseCommon, stringListParam } from "../params.ts";
 import type { ParsedParams, SourceContext, SourceDefinition } from "./source.ts";
@@ -124,7 +125,7 @@ function issueItem(
       ...(entities ? [`entities: ${entities}`] : []),
       ...(opened ? [`activated ${opened}`] : []),
     ].join(" · "),
-    url: context.endpoints.web,
+    url: issueUrl(context.endpoints, params.accountId, id) ?? context.endpoints.web,
     attributes: {
       kind: "issues",
       account_id: params.accountId,

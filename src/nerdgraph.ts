@@ -15,6 +15,14 @@ export interface RegionEndpoints {
   mcp: string;
   /** New Relic UI base for item links; absent for loopback. */
   web?: string;
+  /** New Relic's issue redirect host (the official issuePageUrl); absent for loopback. */
+  issues?: string;
+}
+
+/** Links one alert issue through New Relic's own redirect to its UI page (D-21); undefined for loopback. */
+export function issueUrl(endpoints: RegionEndpoints, accountId: number, issueId: string): string | undefined {
+  if (!endpoints.issues || !issueId) return undefined;
+  return `${endpoints.issues}/accounts/${accountId}/issues/${encodeURIComponent(issueId)}`;
 }
 
 export const REQUEST_TIMEOUT_MS = 10_000;
@@ -33,6 +41,7 @@ export function regionEndpoints(region: Region): RegionEndpoints {
       graphql: "https://api.newrelic.com/graphql",
       mcp: "https://mcp.newrelic.com/mcp/",
       web: "https://one.newrelic.com",
+      issues: "https://radar-api.service.newrelic.com",
     };
   }
   if (region === "eu") {
@@ -40,6 +49,7 @@ export function regionEndpoints(region: Region): RegionEndpoints {
       graphql: "https://api.eu.newrelic.com/graphql",
       mcp: "https://mcp.eu.newrelic.com/mcp/",
       web: "https://one.eu.newrelic.com",
+      issues: "https://radar-api.service.eu.newrelic.com",
     };
   }
   const port = Number(region.slice("loopback:".length));

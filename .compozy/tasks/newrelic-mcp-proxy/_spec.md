@@ -512,3 +512,17 @@ S2 and S3 can run in parallel after S1.
   (`tls.setDefaultCACertificates`, Node 22.19+/24.5+; older runtimes keep the bundled roots). NerdGraph
   and MCP request failures name their cause: `TLS certificate not trusted (<code>)` for certificate
   errors, `network error (<code>)` otherwise. `src/system-ca.ts` owns both; it does no network I/O.
+- **D-21 (2026-11-15, found in the live E2E, recorded before coding): issue links and lean proxy
+  results.**
+  1. **Issue links** (closes the D-4 open point). `aiIssues` returns no link for an issue; the
+     `url` of `newrelic/issues` items and of `alert_issues` rows was the UI home page. Both now link
+     the issue through New Relic's own issue redirect, the `issuePageUrl` the official MCP returns:
+     `https://radar-api.service.newrelic.com/accounts/<account>/issues/<issueId>` (US) or
+     `radar-api.service.eu.newrelic.com` (EU), which redirects to the issue in the UI. Loopback
+     regions keep no link. `alert_issues` shows the link per row instead of one trailing UI URL.
+  2. **No duplicated proxy payload.** `mcp_call` returned both `structured` and a `text` copy of
+     the same JSON, doubling the tokens of every call. When the remote result has
+     `structuredContent`, `mcp_call` returns `structured` and drops a `text` that only repeats it;
+     non-JSON text, or text that differs, is kept. The `mcp_call` description advises a time window
+     (`start_time_ms`) for list tools, because the official server rejects results over its own
+     10,000-token limit.

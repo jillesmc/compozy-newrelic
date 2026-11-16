@@ -208,8 +208,12 @@ describe("MCP proxy (unit, fake MCP)", () => {
 
   test("UT-190 redaction: a key echoed in remote text, structured content or a remote error is redacted", async () => {
     h.nr.mcpFake.tools.push({ name: "echo_key", annotations: READ, behavior: "echo_key" });
+    h.nr.mcpFake.tools.push({ name: "json_differs", annotations: READ, behavior: "json_differs" });
     const echoed = await h.call("mcp_call", { tool: "echo_key" });
     assert.deepEqual(out(echoed), { tool: "echo_key", is_error: false, text: "your key is [redacted]", structured: { key: "[redacted]" }, truncated: false });
+    // D-21.2: only a text that repeats the structured result is dropped; different JSON is kept.
+    const differs = out(await h.call("mcp_call", { tool: "json_differs" }));
+    assert.deepEqual(differs, { tool: "json_differs", is_error: false, text: '{"rows":1}', structured: { rows: 2 }, truncated: false });
     const remoteError = await h.call("mcp_call", { tool: "execute_nrql_query", arguments: { nrql: FAKE_KEY } });
     assert.equal(out(remoteError).is_error, true);
     h.nr.mcpFake.tools.push({ name: `rpc_${FAKE_KEY}`, annotations: READ, behavior: "rpc_error" });

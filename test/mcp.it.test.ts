@@ -21,7 +21,7 @@ async function assertCalls(): Promise<void> {
   assert.deepEqual(ok, {
     tool: "list_recent_issues",
     is_error: false,
-    text: '{"tool":"list_recent_issues","arguments":{"account_id":1234567}}',
+    // D-21.2: the text part only repeated the structured result, so it is dropped.
     structured: { tool: "list_recent_issues", arguments: { account_id: 1234567 } },
     truncated: false,
   });

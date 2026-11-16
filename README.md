@@ -30,7 +30,7 @@ official MCP. The extension has nine tools including the doctor, and never write
 Install it for all projects:
 
 ```bash
-compozy extension install github:jillesmc/compozy-newrelic@v0.2.1 --allow-unverified --yes
+compozy extension install github:jillesmc/compozy-newrelic@v0.2.2 --allow-unverified --yes
 ```
 
 Without `--scope` the install is global: the packaged MCP servers default to global scope (v0.1.0
@@ -404,7 +404,7 @@ default, or `eu`).
 | `ext__newrelic__nrql_query` | `account_id`, `nrql` | Up to 50 rows as a compact table; nested aggregates become dotted columns (`percentile.duration.95`). |
 | `ext__newrelic__list_accounts` | — | Up to 50 `{id, name}`. |
 | `ext__newrelic__search_entities` | `query` (a name, or a NerdGraph entity search such as `domain = 'APM' AND name LIKE 'checkout'`) | Up to 25 `{guid, name, type, domain, alert_severity}`. |
-| `ext__newrelic__alert_issues` | `account_id`, `state?` (`open` default, `closed`, `all`), `priorities?`, `since?` (≤ `24h`) | Up to 25 `{id, title, priority, state, entities, opened_at, url}`, highest priority and newest first. |
+| `ext__newrelic__alert_issues` | `account_id`, `state?` (`open` default, `closed`, `all`), `priorities?`, `since?` (≤ `24h`) | Up to 25 `{id, title, priority, state, entities, opened_at, url}`, highest priority and newest first; `url` opens that issue. |
 | `ext__newrelic__error_groups` | `account_id`, `where?`, `window?` (`30m` default) | Up to 25 `{app, class, message (≤ 160), count, last_seen}`, most frequent first. |
 | `ext__newrelic__recent_logs` | `account_id`, `where`, `window?` (`15m` default), `limit?` (1–50, default 20) | Lines `{timestamp, service, level, message (≤ 300)}`. |
 | `ext__newrelic__mcp_tools` | `query?`, `limit?` (1–60, default 60) | The official MCP tools usable with the key; see [the proxy](#official-mcp-via-the-api-key-proxy). |
@@ -472,7 +472,7 @@ disappear within 10 minutes, without an extension release.
 | Tool | Input | Returns |
 | --- | --- | --- |
 | `ext__newrelic__mcp_tools` | `region?` (`us` default, or `eu`), `query?` (case-insensitive substring of the name or description), `limit?` (1–60, default 60) | `{region, state, exposed: [{name, description (≤ 200), input: {prop: "type — description (≤ 80)"}}], hidden: {oauth_only, not_read_only}, truncated}`, sorted by name. |
-| `ext__newrelic__mcp_call` | `tool`, `arguments?` (object, ≤ 64 KiB as JSON), `region?` | `{tool, is_error, text (≤ 16 KiB), structured?, truncated}`. |
+| `ext__newrelic__mcp_call` | `tool`, `arguments?` (object, ≤ 64 KiB as JSON), `region?` | `{tool, is_error, text? (≤ 16 KiB), structured?, truncated}`; `text` is omitted when it only repeats `structured`. |
 
 ```json
 {"tool": "ext__newrelic__mcp_tools", "input": {"query": "trace"}}
@@ -486,7 +486,10 @@ disappear within 10 minutes, without an extension release.
 - Arguments are forwarded as given; the remote tool validates them. A remote tool error returns
   `is_error: true` with the remote message in `text`.
 - Text content is joined and cut at 16 KiB. `structured` is passed through only when it fits in
-  16 KiB. Images and other non-text parts become one-line placeholders.
+  16 KiB. When the text only repeats `structured` as JSON, `text` is left out so a call does not cost
+  twice the tokens. Images and other non-text parts become one-line placeholders.
+- List tools such as `list_recent_issues` answer `exceeded the 10,000 token limit` without a time
+  window: pass `start_time_ms` (epoch milliseconds) or narrower filters.
 - Calls time out after 60 s (other requests after 10 s). An expired MCP session is re-initialized
   once; a 404 that persists after that means the MCP is unavailable for the key.
 - The key is redacted from every result and error.

@@ -62,7 +62,7 @@ describe("newrelic/issues", () => {
       key: "crit-1",
       title: "CRITICAL issue: CRITICAL trouble on crit-1",
       summary: `New Relic alert issue · account ${ACCOUNT} (us) · priority CRITICAL · state ACTIVATED · entities: checkout-api · activated ${new Date(T0).toISOString()}`,
-      url: "https://one.newrelic.com",
+      url: `https://radar-api.service.newrelic.com/accounts/${ACCOUNT}/issues/crit-1`,
       attributes: {
         kind: "issues",
         account_id: ACCOUNT,

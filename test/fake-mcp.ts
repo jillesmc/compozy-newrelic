@@ -8,7 +8,7 @@
  */
 import type { IncomingHttpHeaders, ServerResponse } from "node:http";
 
-export type FakeToolBehavior = "ok" | "error" | "rpc_error" | "oauth" | "slow" | "big" | "echo_key" | "image";
+export type FakeToolBehavior = "ok" | "error" | "rpc_error" | "oauth" | "slow" | "big" | "echo_key" | "image" | "json_differs";
 
 export interface FakeTool {
   name: string;
@@ -144,6 +144,8 @@ export async function answerMcp(mcp: FakeMcp, headers: IncomingHttpHeaders, raw:
       return send(403, { error: `Tool ${name} requires OAuth authentication` });
     case "big":
       return ok({ content: [text("x".repeat(40 * 1024))], structuredContent: { blob: "y".repeat(20 * 1024) } });
+    case "json_differs":
+      return ok({ content: [text('{"rows":1}')], structuredContent: { rows: 2 } });
     case "echo_key":
       return ok({ content: [text(`your key is ${apiKey}`)], structuredContent: { key: apiKey } });
     case "image":

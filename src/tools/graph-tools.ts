@@ -1,5 +1,6 @@
 import { paramsError } from "../errors.ts";
 import { epochMs, fetchIssuePages } from "../issue-query.ts";
+import { issueUrl } from "../nerdgraph.ts";
 import { parseWindow } from "../params.ts";
 import { boundedResult, cell, renderLines, type Row } from "./format.ts";
 import { ACCOUNT_PROPERTIES, accountId, REGION_PROPERTY, type NerdGraphTool } from "./tool.ts";
@@ -111,14 +112,9 @@ export const alertIssuesTool: NerdGraphTool = {
         state: cell(issue.state),
         entities: cell(Array.isArray(issue.entityNames) ? issue.entityNames.join(", ") : issue.entityNames),
         opened_at: opened(issue) ? new Date(opened(issue)).toISOString() : null,
-        url: ctx.endpoints.web ?? null,
+        url: issueUrl(ctx.endpoints, id, String(issue.issueId ?? "")) ?? ctx.endpoints.web ?? null,
       }));
-    const columns = ["priority", "state", "opened_at", "id", "entities", "title"];
-    return boundedResult({
-      rows,
-      cap: MAX_ISSUES,
-      more,
-      render: shown => renderLines(shown, columns) + (ctx.endpoints.web && shown.length ? `\nurl: ${ctx.endpoints.web}` : ""),
-    });
+    const columns = ["priority", "state", "opened_at", "id", "entities", "title", "url"];
+    return boundedResult({ rows, cap: MAX_ISSUES, more, render: shown => renderLines(shown, columns) });
   },
 };

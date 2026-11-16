@@ -34,7 +34,7 @@ function context(answer: (call: Call) => unknown): { ctx: ToolContext; calls: Ca
   };
   const ctx = {
     client,
-    endpoints: { graphql: "", mcp: "", web: "https://one.newrelic.com" },
+    endpoints: { graphql: "", mcp: "", web: "https://one.newrelic.com", issues: "https://radar-api.service.newrelic.com" },
     signal: new AbortController().signal,
     now: () => new Date(NOW),
   };
@@ -176,7 +176,8 @@ describe("investigation tools", () => {
       state: "ACTIVATED",
       entities: "api, web",
       opened_at: new Date(now - 30 * hour).toISOString(),
-      url: "https://one.newrelic.com",
+      // D-21.1: each row links its own issue through New Relic's issue redirect.
+      url: `https://radar-api.service.newrelic.com/accounts/${ACCOUNT}/issues/old`,
     });
     assert.equal(all.calls.length, 2);
     assert.deepEqual(all.calls.map(call => call.variables), [{ id: ACCOUNT }, { id: ACCOUNT }]);

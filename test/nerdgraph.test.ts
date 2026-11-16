@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { regionEndpoints } from "../src/nerdgraph.ts";
+import { issueUrl, regionEndpoints } from "../src/nerdgraph.ts";
 import { createPollHandler } from "../src/poll.ts";
 import { nrqlSource } from "../src/sources/nrql.ts";
 import { ACCOUNT, pollRequest, rejection } from "./helpers.ts";
@@ -47,15 +47,27 @@ describe("credentials and region", () => {
       graphql: "https://api.newrelic.com/graphql",
       mcp: "https://mcp.newrelic.com/mcp/",
       web: "https://one.newrelic.com",
+      issues: "https://radar-api.service.newrelic.com",
     });
     assert.deepEqual(regionEndpoints("eu"), {
       graphql: "https://api.eu.newrelic.com/graphql",
       mcp: "https://mcp.eu.newrelic.com/mcp/",
       web: "https://one.eu.newrelic.com",
+      issues: "https://radar-api.service.eu.newrelic.com",
     });
     assert.deepEqual(regionEndpoints("loopback:8788"), {
       graphql: "http://127.0.0.1:8788/graphql",
       mcp: "http://127.0.0.1:8788/mcp/",
     });
+  });
+
+  test("UT-082 issue links: New Relic's issue redirect per region; none for loopback", () => {
+    assert.equal(
+      issueUrl(regionEndpoints("us"), 317703, "2a9c de"),
+      "https://radar-api.service.newrelic.com/accounts/317703/issues/2a9c%20de"
+    );
+    assert.equal(issueUrl(regionEndpoints("eu"), 1, "x"), "https://radar-api.service.eu.newrelic.com/accounts/1/issues/x");
+    assert.equal(issueUrl(regionEndpoints("loopback:8788"), 1, "x"), undefined);
+    assert.equal(issueUrl(regionEndpoints("us"), 1, ""), undefined);
   });
 });

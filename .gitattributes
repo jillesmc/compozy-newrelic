@@ -1,0 +1,2 @@
+# CLAUDE.md is a symlink to AGENTS.md; CompozyOS rejects symlinks in extension archives.
+CLAUDE.md export-ignore

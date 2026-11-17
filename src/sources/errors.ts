@@ -30,7 +30,6 @@ export interface ErrorsParams extends ParsedParams {
 export const ERRORS_PARAMS_SCHEMA: JSONValue = {
   type: "object",
   additionalProperties: false,
-  required: ["account_id"],
   properties: {
     ...COMMON_PROPERTIES,
     where: { type: "string", minLength: 1, maxLength: 4000 },

@@ -30,7 +30,7 @@ official MCP. The extension has nine tools including the doctor, and never write
 Install it for all projects:
 
 ```bash
-compozy extension install github:jillesmc/compozy-newrelic@v0.2.3 --allow-unverified --yes
+compozy extension install github:jillesmc/compozy-newrelic@v0.3.0 --allow-unverified --yes
 ```
 
 Without `--scope` the install is global: the packaged MCP servers default to global scope (v0.1.0
@@ -60,6 +60,25 @@ compozy extension disable newrelic && compozy extension enable newrelic
 
 This one secret serves every source and tool, including the MCP proxy. The OAuth servers do not use
 it; they sign in with OAuth (see [Official MCP via OAuth](#official-mcp-via-oauth)).
+
+## Workspace defaults (optional)
+
+Two optional values let one HEARTBEAT serve several projects. Set them per workspace:
+
+```bash
+printf '1234567' | compozy extension secrets set newrelic --workspace acme-api --value-stdin --env NEW_RELIC_ACCOUNT_ID
+printf 'acme-api-production' | compozy extension secrets set newrelic --workspace acme-api --value-stdin --env NEW_RELIC_APP
+```
+
+| Env | Effect |
+| --- | --- |
+| `NEW_RELIC_ACCOUNT_ID` | Account used when a source omits `with.account_id`. An explicit `with.account_id` always wins. |
+| `NEW_RELIC_APP` | Replaces `{{app}}` in a source's `with.where`, e.g. `where: "appName = '{{app}}'"`. |
+
+`{{app}}` is the only placeholder, and only in `with.where`. A value with `'`, `"` or `\` is rejected
+(`source_params_invalid`) and never sent. Both keys appear in `requires_env` because SDK 0.7.0 has no
+optional-env field; the extension runs without them, and status lists them as missing until set.
+The investigation tools still take `account_id` explicitly.
 
 ## Grant the tools
 
@@ -219,7 +238,7 @@ Every kind accepts these parameters:
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `account_id` | integer | required | New Relic account to query. |
+| `account_id` | integer | `NEW_RELIC_ACCOUNT_ID` | New Relic account to query; required when the workspace sets no default. |
 | `region` | `us` \| `eu` | `us` | NerdGraph endpoint (`api.newrelic.com` or `api.eu.newrelic.com`). |
 | `notify_existing` | bool | `false` | Report what is already active at the baseline. |
 
@@ -258,7 +277,7 @@ Windows are `<n>m` or `<n>h`, from `5m` to `24h`. The source adds `SINCE <window
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `where` | string | none | NRQL `WHERE` body, without the `WHERE` keyword. |
+| `where` | string | none | NRQL `WHERE` body, without the `WHERE` keyword; `{{app}}` expands to `NEW_RELIC_APP`. |
 | `event_types` | string[] (`TransactionError`, `JavaScriptError`) | `[TransactionError]` | Event types to count. |
 | `window` | duration | `30m` | Counting window. |
 | `min_count` | integer ≥ 1 | `1` | Occurrences in the window that make an error type active. |
@@ -274,7 +293,7 @@ Windows are `<n>m` or `<n>h`, from `5m` to `24h`. The source adds `SINCE <window
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `where` | string | required | NRQL `WHERE` body over `Log`. |
+| `where` | string | required | NRQL `WHERE` body over `Log`; `{{app}}` expands to `NEW_RELIC_APP`. |
 | `facet` | string | none | Attribute to group by (for example `service.name`). |
 | `window` | duration | `15m` | Counting window. |
 | `threshold` | integer ≥ 0 | required | Lines in the window that make a group active (strict `>`). |
@@ -331,6 +350,9 @@ A `min_interval` of 5 minutes or more is a sensible floor.
 | Key rejected (401/403), or not an `NRAK-` user key | `source_credential_expired` | `New Relic rejected the API key; bind a User API key (NRAK-...)` |
 | 429 | `source_rate_limited` | `New Relic rate limit reached; retry later` |
 | NRQL or GraphQL error | `source_params_invalid` | `New Relic rejected the query: <message, at most 300 characters>` |
+| No `account_id` and no `NEW_RELIC_ACCOUNT_ID` | `source_params_invalid` | `set with.account_id or NEW_RELIC_ACCOUNT_ID for this workspace` |
+| `{{app}}` in `where` without `NEW_RELIC_APP` | `source_params_invalid` | `with.where uses {{app}}; set NEW_RELIC_APP for this workspace` |
+| `NEW_RELIC_APP` with `'`, `"` or `\` | `source_params_invalid` | `NEW_RELIC_APP must not contain quotes or backslashes` |
 | No access to `account_id` | `source_params_invalid` | `this API key cannot read account 1234567` |
 | NRQL result not one number per row | `source_params_invalid` | `nrql must return one number per row (e.g. SELECT count(*) ... FACET x)` |
 | More than 500 rows | `source_params_invalid` | `nrql returned more than 500 rows; add LIMIT or narrow the FACET` |

@@ -3,8 +3,9 @@ import { describe, test } from "node:test";
 
 import { issueUrl, regionEndpoints } from "../src/nerdgraph.ts";
 import { createPollHandler } from "../src/poll.ts";
+import { errorsSource } from "../src/sources/errors.ts";
 import { nrqlSource } from "../src/sources/nrql.ts";
-import { ACCOUNT, pollRequest, rejection } from "./helpers.ts";
+import { ACCOUNT, FAKE_KEY, pollRequest, rejection } from "./helpers.ts";
 
 const params = { account_id: ACCOUNT, nrql: "SELECT count(*) FROM Transaction", threshold: 1 };
 
@@ -69,5 +70,69 @@ describe("credentials and region", () => {
     assert.equal(issueUrl(regionEndpoints("eu"), 1, "x"), "https://radar-api.service.eu.newrelic.com/accounts/1/issues/x");
     assert.equal(issueUrl(regionEndpoints("loopback:8788"), 1, "x"), undefined);
     assert.equal(issueUrl(regionEndpoints("us"), 1, ""), undefined);
+  });
+});
+
+describe("factory-user-agents workspace defaults (NEW_RELIC_ACCOUNT_ID, NEW_RELIC_APP)", () => {
+  /** Polls newrelic/errors through the handler with a NerdGraph fetch spy that answers no rows. */
+  async function pollErrors(with_: Record<string, unknown>, extraEnv: Record<string, string> = {}) {
+    const sent: { id: number; q: string }[] = [];
+    const fetchSpy = (async (_url: string, init: RequestInit) => {
+      sent.push(JSON.parse(String(init.body)).variables);
+      return new Response(JSON.stringify({ data: { actor: { account: { nrql: { results: [] } } } } }));
+    }) as unknown as typeof fetch;
+    const env = { NEW_RELIC_API_KEY: FAKE_KEY, ...extraEnv };
+    const run = createPollHandler(errorsSource, { env, fetch: fetchSpy, stderr: { write: () => true } })(
+      pollRequest(with_, null, { kind: "errors" })
+    );
+    return { run, sent };
+  }
+
+  test("UT-040 workspace defaults: no with.account_id uses NEW_RELIC_ACCOUNT_ID", async () => {
+    const { run, sent } = await pollErrors({}, { NEW_RELIC_ACCOUNT_ID: "317703" });
+    await run;
+    assert.equal(sent[0]?.id, 317703);
+  });
+
+  test("UT-041 workspace defaults: an explicit with.account_id wins over NEW_RELIC_ACCOUNT_ID", async () => {
+    const { run, sent } = await pollErrors({ account_id: ACCOUNT }, { NEW_RELIC_ACCOUNT_ID: "317703" });
+    await run;
+    assert.equal(sent[0]?.id, ACCOUNT);
+  });
+
+  test("UT-042 workspace defaults: neither is params_invalid naming both; a malformed default too", async () => {
+    const { run, sent } = await pollErrors({});
+    const neither = await rejection(run);
+    assert.equal(neither.data?.code, "source_params_invalid");
+    assert.equal(neither.message, "set with.account_id or NEW_RELIC_ACCOUNT_ID for this workspace");
+    const bad = await pollErrors({}, { NEW_RELIC_ACCOUNT_ID: "31x" });
+    assert.equal((await rejection(bad.run)).data?.code, "source_params_invalid");
+    assert.equal(sent.length + bad.sent.length, 0);
+  });
+
+  test("UT-043 workspace defaults: {{app}} in with.where expands to NEW_RELIC_APP", async () => {
+    const env = { NEW_RELIC_ACCOUNT_ID: "317703", NEW_RELIC_APP: "report-portal-production" };
+    const { run, sent } = await pollErrors({ where: "appName = '{{app}}'" }, env);
+    await run;
+    assert.match(sent[0]?.q ?? "", /WHERE appName = 'report-portal-production' /);
+    assert.equal(sent[0]?.q.includes("{{app}}"), false);
+  });
+
+  test("UT-044 workspace defaults: {{app}} without NEW_RELIC_APP is params_invalid naming it", async () => {
+    const { run, sent } = await pollErrors({ account_id: ACCOUNT, where: "appName = '{{app}}'" });
+    const error = await rejection(run);
+    assert.equal(error.data?.code, "source_params_invalid");
+    assert.match(error.message, /NEW_RELIC_APP/);
+    assert.equal(sent.length, 0);
+  });
+
+  test("UT-045 workspace defaults: NEW_RELIC_APP with a quote or backslash is params_invalid; no query sent", async () => {
+    for (const app of ["a' OR 1=1 --", 'a"b', "a\\b"]) {
+      const { run, sent } = await pollErrors({ account_id: ACCOUNT, where: "appName = '{{app}}'" }, { NEW_RELIC_APP: app });
+      const error = await rejection(run);
+      assert.equal(error.data?.code, "source_params_invalid");
+      assert.equal(error.message.includes(app), false);
+      assert.equal(sent.length, 0);
+    }
   });
 });

@@ -8,13 +8,19 @@ import { SOURCES } from "./sources/index.ts";
 import { trustSystemCertificates } from "./system-ca.ts";
 import { createProxyCatalog, toolHandler, TOOLS, type ToolDeps } from "./tools/index.ts";
 
-export const EXTENSION_VERSION = "0.2.3";
+export const EXTENSION_VERSION = "0.3.0";
 /**
  * Supported CompozyOS floor. The TS SDK 0.7.0 describe payload still carries its stale built-in floor
  * "0.3.0-beta.1" and `compozy extension build` stamps extension.toml from it, so it is set here.
  */
 export const MIN_COMPOZY_VERSION = "0.7.0";
 export const REQUIRED_ENV = ["NEW_RELIC_API_KEY"];
+/**
+ * Optional per-workspace values (account default, `{{app}}`). SDK 0.7.0 has no optional-env field, so
+ * they are declared in `requires_env` too (that is what lets `secrets set --env` accept them); the
+ * daemon keeps the extension active while they are unset, and the code treats them as optional.
+ */
+export const OPTIONAL_ENV = ["NEW_RELIC_ACCOUNT_ID", "NEW_RELIC_APP"];
 
 class NewRelicExtension extends Extension {
   public override describe(): ReturnType<Extension["describe"]> {
@@ -35,7 +41,7 @@ export function createExtension(options: ExtensionOptions = {}, deps: NewRelicEx
       subprocess: { command: "node", args: ["index.js"] },
       capabilities: { provides: [] },
       permissions: { requires: [] },
-      requires_env: [...REQUIRED_ENV],
+      requires_env: [...REQUIRED_ENV, ...OPTIONAL_ENV],
     },
     options
   );

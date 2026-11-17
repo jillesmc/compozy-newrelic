@@ -25,7 +25,7 @@ const TIME_FIELDS = new Set(["facet", "beginTimeSeconds", "endTimeSeconds", "tim
 export const NRQL_PARAMS_SCHEMA: JSONValue = {
   type: "object",
   additionalProperties: false,
-  required: ["account_id", "nrql", "threshold"],
+  required: ["nrql", "threshold"],
   properties: {
     ...COMMON_PROPERTIES,
     nrql: { type: "string", minLength: 1, maxLength: 4000 },

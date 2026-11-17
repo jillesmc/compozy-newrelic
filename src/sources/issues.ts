@@ -26,7 +26,6 @@ export interface IssuesParams extends ParsedParams {
 export const ISSUES_PARAMS_SCHEMA: JSONValue = {
   type: "object",
   additionalProperties: false,
-  required: ["account_id"],
   properties: {
     ...COMMON_PROPERTIES,
     priorities: {

@@ -29,7 +29,7 @@ const MAX_WHERE_ATTRIBUTE_CHARS = 300;
 export const LOGS_PARAMS_SCHEMA: JSONValue = {
   type: "object",
   additionalProperties: false,
-  required: ["account_id", "where", "threshold"],
+  required: ["where", "threshold"],
   properties: {
     ...COMMON_PROPERTIES,
     where: { type: "string", minLength: 1, maxLength: 4000 },

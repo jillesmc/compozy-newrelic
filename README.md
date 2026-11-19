@@ -30,7 +30,7 @@ official MCP. The extension has nine tools including the doctor, and never write
 Install it for all projects:
 
 ```bash
-compozy extension install github:jillesmc/compozy-newrelic@v0.3.1 --allow-unverified --yes
+compozy extension install github:jillesmc/compozy-newrelic@v0.4.0 --allow-unverified --yes
 ```
 
 Without `--scope` the install is global: the packaged MCP servers default to global scope (v0.1.0
@@ -61,24 +61,68 @@ compozy extension disable newrelic && compozy extension enable newrelic
 This one secret serves every source and tool, including the MCP proxy. The OAuth servers do not use
 it; they sign in with OAuth (see [Official MCP via OAuth](#official-mcp-via-oauth)).
 
-## Workspace defaults (optional)
+## Per-project values
 
-Two optional values let one HEARTBEAT serve several projects. Set them per workspace:
+Each project carries its own New Relic app and default account in a file this extension owns,
+versioned in the project repository:
 
-```bash
-printf '1234567' | compozy extension secrets set newrelic --workspace acme-api --value-stdin --env NEW_RELIC_ACCOUNT_ID
-printf 'acme-api-production' | compozy extension secrets set newrelic --workspace acme-api --value-stdin --env NEW_RELIC_APP
+```toml
+# <workspace root>/.compozy/newrelic.toml
+app = "acme-api-prod"     # fills {{app}}; no quotes or backslashes
+account_id = 1234567      # positive integer; default account for sources and tools
 ```
 
-| Env | Effect |
-| --- | --- |
-| `NEW_RELIC_ACCOUNT_ID` | Account used when a source omits `with.account_id`. An explicit `with.account_id` always wins. |
-| `NEW_RELIC_APP` | Replaces `{{app}}` in a source's `with.where`, e.g. `where: "appName = '{{app}}'"`. |
+Values resolve in this order, first hit wins:
 
-`{{app}}` is the only placeholder, and only in `with.where`. A value with `'`, `"` or `\` is rejected
-(`source_params_invalid`) and never sent. Both keys appear in `requires_env` because SDK 0.7.0 has no
-optional-env field; the extension runs without them, and status lists them as missing until set.
-The investigation tools still take `account_id` explicitly.
+1. An explicit parameter: `with.app` / `with.account_id` on a source, `app` / `account_id` on a tool.
+2. `.compozy/newrelic.toml` under the workspace root.
+3. `NEW_RELIC_ACCOUNT_ID` (account only; an optional standalone default).
+
+Check-in sources read the file under the poll's workspace root, so one shared `HEARTBEAT.md` with
+`where: "appName = '{{app}}'"` serves every project. Tools read it under the call's trusted
+workspace (sessions running in a workspace); a call without one reads no file and uses only explicit
+parameters and `NEW_RELIC_ACCOUNT_ID`.
+
+`{{app}}` is the only placeholder, and only in `where`; the app is inserted literally. There is no
+global app fallback.
+
+The file is a deliberately narrow subset of TOML. Anything outside these rules is rejected with
+`source_params_invalid: .compozy/newrelic.toml: <reason>` (tools: `tool_invalid_input`), and no query
+is sent:
+
+- Each non-blank line is a `#` comment or `key = value`, optionally followed by a `# comment`.
+- Keys: only `app` and `account_id`, each at most once. No tables (`[...]`), arrays or inline tables.
+- `app`: a `"double-quoted"` or `'single-quoted'` string of 1 to 256 characters, with no `'`, `"` or
+  `\` and no escape sequences. The same 256-character and quote rules apply to `with.app` / `app`.
+- `account_id`: a positive integer written as plain digits (`1234567`; `1_234_567` is rejected).
+- Size: at most 4096 bytes (4 KiB).
+- `.compozy` must be a real directory and `newrelic.toml` a regular file. A symbolic link at
+  `.compozy` or at `newrelic.toml` is rejected, as are FIFOs and other special files, and the file is
+  read through one no-follow descriptor whose type and size are checked before any read. A process
+  that can rewrite the workspace while it is being read is out of scope: it can already set the
+  values in the file directly.
+
+To set the optional account default (`NEW_RELIC_ACCOUNT_ID` appears in `requires_env` because SDK 0.7.0
+has no optional-env field; the extension runs without it, and status lists it as missing until set):
+
+```bash
+printf '1234567' | compozy extension secrets set newrelic --value-stdin --env NEW_RELIC_ACCOUNT_ID
+```
+
+### Migrating from 0.3.x
+
+**BREAKING (0.4.0): `NEW_RELIC_APP` is removed** and ignored if still set. Put `app` (and
+`account_id`) in `<project>/.compozy/newrelic.toml`, or pass `with.app` / `app`. Then:
+
+```bash
+compozy extension secrets unset newrelic --env NEW_RELIC_APP
+```
+
+Until a project has the file (or the source passes `with.app`), a source whose `where` uses `{{app}}`
+fails with `source_params_invalid: with.where uses {{app}}; set app in .compozy/newrelic.toml or with.app`.
+The account precedence also changed: the project file's `account_id` now wins over
+`NEW_RELIC_ACCOUNT_ID`, and the investigation tools take `account_id` from the file or the env when
+omitted.
 
 ## Grant the tools
 
@@ -238,7 +282,8 @@ Every kind accepts these parameters:
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `account_id` | integer | `NEW_RELIC_ACCOUNT_ID` | New Relic account to query; required when the workspace sets no default. |
+| `account_id` | integer | `.compozy/newrelic.toml`, then `NEW_RELIC_ACCOUNT_ID` | New Relic account to query; required when neither sets one. |
+| `app` | string | `.compozy/newrelic.toml` | Fills `{{app}}` in `where` (see [Per-project values](#per-project-values)). |
 | `region` | `us` \| `eu` | `us` | NerdGraph endpoint (`api.newrelic.com` or `api.eu.newrelic.com`). |
 | `notify_existing` | bool | `false` | Report what is already active at the baseline. |
 
@@ -277,7 +322,7 @@ Windows are `<n>m` or `<n>h`, from `5m` to `24h`. The source adds `SINCE <window
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `where` | string | none | NRQL `WHERE` body, without the `WHERE` keyword; `{{app}}` expands to `NEW_RELIC_APP`. |
+| `where` | string | none | NRQL `WHERE` body, without the `WHERE` keyword; `{{app}}` expands to the project app. |
 | `event_types` | string[] (`TransactionError`, `JavaScriptError`) | `[TransactionError]` | Event types to count. |
 | `window` | duration | `30m` | Counting window. |
 | `min_count` | integer ≥ 1 | `1` | Occurrences in the window that make an error type active. |
@@ -293,7 +338,7 @@ Windows are `<n>m` or `<n>h`, from `5m` to `24h`. The source adds `SINCE <window
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `where` | string | required | NRQL `WHERE` body over `Log`; `{{app}}` expands to `NEW_RELIC_APP`. |
+| `where` | string | required | NRQL `WHERE` body over `Log`; `{{app}}` expands to the project app. |
 | `facet` | string | none | Attribute to group by (for example `service.name`). |
 | `window` | duration | `15m` | Counting window. |
 | `threshold` | integer ≥ 0 | required | Lines in the window that make a group active (strict `>`). |
@@ -350,9 +395,10 @@ A `min_interval` of 5 minutes or more is a sensible floor.
 | Key rejected (401/403), or not an `NRAK-` user key | `source_credential_expired` | `New Relic rejected the API key; bind a User API key (NRAK-...)` |
 | 429 | `source_rate_limited` | `New Relic rate limit reached; retry later` |
 | NRQL or GraphQL error | `source_params_invalid` | `New Relic rejected the query: <message, at most 300 characters>` |
-| No `account_id` and no `NEW_RELIC_ACCOUNT_ID` | `source_params_invalid` | `set with.account_id or NEW_RELIC_ACCOUNT_ID for this workspace` |
-| `{{app}}` in `where` without `NEW_RELIC_APP` | `source_params_invalid` | `with.where uses {{app}}; set NEW_RELIC_APP for this workspace` |
-| `NEW_RELIC_APP` with `'`, `"` or `\` | `source_params_invalid` | `NEW_RELIC_APP must not contain quotes or backslashes` |
+| No `account_id` anywhere | `source_params_invalid` | `set with.account_id, account_id in .compozy/newrelic.toml, or NEW_RELIC_ACCOUNT_ID` |
+| `{{app}}` in `where` with no app | `source_params_invalid` | `with.where uses {{app}}; set app in .compozy/newrelic.toml or with.app` |
+| App with `'`, `"` or `\` | `source_params_invalid` | `with.app must not contain quotes or backslashes` (or `.compozy/newrelic.toml: app ...`) |
+| Malformed `.compozy/newrelic.toml` | `source_params_invalid` | `.compozy/newrelic.toml: <reason>` |
 | No access to `account_id` | `source_params_invalid` | `this API key cannot read account 1234567` |
 | NRQL result not one number per row | `source_params_invalid` | `nrql must return one number per row (e.g. SELECT count(*) ... FACET x)` |
 | More than 500 rows | `source_params_invalid` | `nrql returned more than 500 rows; add LIMIT or narrow the FACET` |
@@ -423,15 +469,18 @@ default, or `eu`).
 
 | Tool | Input | Returns |
 | --- | --- | --- |
-| `ext__newrelic__nrql_query` | `account_id`, `nrql` | Up to 50 rows as a compact table; nested aggregates become dotted columns (`percentile.duration.95`). |
+| `ext__newrelic__nrql_query` | `nrql`, `account_id?` | Up to 50 rows as a compact table; nested aggregates become dotted columns (`percentile.duration.95`). |
 | `ext__newrelic__list_accounts` | — | Up to 50 `{id, name}`. |
 | `ext__newrelic__search_entities` | `query` (a name, or a NerdGraph entity search such as `domain = 'APM' AND name LIKE 'checkout'`) | Up to 25 `{guid, name, type, domain, alert_severity}`. |
-| `ext__newrelic__alert_issues` | `account_id`, `state?` (`open` default, `closed`, `all`), `priorities?`, `since?` (≤ `24h`) | Up to 25 `{id, title, priority, state, entities, opened_at, url}`, highest priority and newest first; `url` opens that issue. |
-| `ext__newrelic__error_groups` | `account_id`, `where?`, `window?` (`30m` default) | Up to 25 `{app, class, message (≤ 160), count, last_seen}`, most frequent first. |
-| `ext__newrelic__recent_logs` | `account_id`, `where`, `window?` (`15m` default), `limit?` (1–50, default 20) | Lines `{timestamp, service, level, message (≤ 300)}`. |
+| `ext__newrelic__alert_issues` | `account_id?`, `state?` (`open` default, `closed`, `all`), `priorities?`, `since?` (≤ `24h`) | Up to 25 `{id, title, priority, state, entities, opened_at, url}`, highest priority and newest first; `url` opens that issue. |
+| `ext__newrelic__error_groups` | `account_id?`, `app?`, `where?`, `window?` (`30m` default) | Up to 25 `{app, class, message (≤ 160), count, last_seen}`, most frequent first. |
+| `ext__newrelic__recent_logs` | `account_id?`, `app?`, `where`, `window?` (`15m` default), `limit?` (1–50, default 20) | Lines `{timestamp, service, level, message (≤ 300)}`. |
 | `ext__newrelic__mcp_tools` | `query?`, `limit?` (1–60, default 60) | The official MCP tools usable with the key; see [the proxy](#official-mcp-via-the-api-key-proxy). |
 | `ext__newrelic__mcp_call` | `tool`, `arguments?` (≤ 64 KiB) | One official MCP tool's result, text ≤ 16 KiB. |
 | `ext__newrelic__doctor` | — | The doctor report. It is an operator command; its description tells agents not to call it. |
+
+`account_id?` and `app?` default from [per-project values](#per-project-values) when the call has a
+trusted workspace, then `account_id` from `NEW_RELIC_ACCOUNT_ID`.
 
 Without a bound key, the investigation and proxy tools return a `credential_absent` error that
 names the secrets command, and they make no network call.
@@ -733,7 +782,8 @@ curl -X POST http://127.0.0.1:8788/_fake/mcp -d '{"reset":true}'        # defaul
 This extension is experimental and versioned 0.x. Within 0.x:
 
 - Parameter names and meanings stay stable. A rename keeps the old key accepted for one minor release,
-  with a deprecation note in the release notes.
+  with a deprecation note in the release notes. Exception: 0.4.0 removes `NEW_RELIC_APP` without a
+  window (see [Migrating from 0.3.x](#migrating-from-03x)).
 - A change to the stored state shape makes the next check re-baseline quietly. You lose at most one
   check's worth of "new" signal and are never flooded.
 

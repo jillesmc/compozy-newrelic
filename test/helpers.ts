@@ -26,7 +26,7 @@ export function pollRequest(
     params: params as JSONValue,
     state: state as JSONValue,
     limits: { max_items: 20, max_summary_bytes: 1024, max_state_bytes: 16384 },
-    workspace: { id: "ws_test", root_dir: "/tmp/ws" },
+    workspace: { id: "ws_test", root_dir: "/nonexistent/compozy-test-ws" },
     now: NOW,
     dry_run: false,
     ...overrides,

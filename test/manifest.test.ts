@@ -21,7 +21,7 @@ type Describe = ReturnType<ReturnType<typeof createExtension>["describe"]>;
 /** UT-110 describe contract, shared by the in-process and the packaged-bundle checks. */
 function assertDescribe(payload: Describe): void {
   assert.equal(payload.sdk.min_compozy_version, "0.7.0");
-  assert.deepEqual(payload.requires_env, ["NEW_RELIC_ACCOUNT_ID", "NEW_RELIC_API_KEY", "NEW_RELIC_APP"]);
+  assert.deepEqual(payload.requires_env, ["NEW_RELIC_ACCOUNT_ID", "NEW_RELIC_API_KEY"]);
   assert.deepEqual([...payload.provides].sort(), ["heartbeat.source", "tool.provider"]);
   assert.deepEqual((payload.heartbeat_source_kinds ?? []).map(kind => kind.kind).sort(), KINDS);
   const tools = payload.tools ?? [];
@@ -88,7 +88,7 @@ describe("manifest", () => {
         const { releaseDir } = buildRelease({ sourceDir: ROOT, releaseDir: join(out, "release") });
         const toml = readFileSync(join(releaseDir, "extension.toml"), "utf8");
         assert.match(toml, /^\s*min_compozy_version = "0\.7\.0"$/m);
-        assert.match(toml, /^\s*requires_env = \["NEW_RELIC_ACCOUNT_ID", "NEW_RELIC_API_KEY", "NEW_RELIC_APP"\]$/m);
+        assert.match(toml, /^\s*requires_env = \["NEW_RELIC_ACCOUNT_ID", "NEW_RELIC_API_KEY"\]$/m);
         assert.match(toml, /^\s*provides = \["heartbeat\.source", "tool\.provider"\]$/m);
         assert.deepEqual([...toml.matchAll(/^\s*id = "(ext__newrelic__\w+)"$/gm)].map(m => m[1]).sort(), TOOL_IDS);
         assert.deepEqual([...toml.matchAll(/^\s*\[resources\.tools\.(\w+)\.command\]$/gm)].map(m => m[1]), ["doctor"]);

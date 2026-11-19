@@ -8,7 +8,7 @@ describe("entry point and normalize", () => {
   test("index: describe() carries min_compozy_version 0.7.0, the env keys and the four kinds", () => {
     const payload = createExtension().describe();
     assert.equal(payload.sdk.min_compozy_version, "0.7.0");
-    assert.deepEqual([...(payload.requires_env ?? [])].sort(), ["NEW_RELIC_ACCOUNT_ID", "NEW_RELIC_API_KEY", "NEW_RELIC_APP"]);
+    assert.deepEqual([...(payload.requires_env ?? [])].sort(), ["NEW_RELIC_ACCOUNT_ID", "NEW_RELIC_API_KEY"]);
     assert.deepEqual([...(payload.provides ?? [])].sort(), ["heartbeat.source", "tool.provider"]);
     assert.deepEqual([payload.subprocess?.command, payload.subprocess?.args], ["node", ["index.js"]]);
     const kinds = payload.heartbeat_source_kinds ?? [];

@@ -44,9 +44,9 @@ export const TOOLS: ToolDefinition[] = [
 
 /** SDK handler: failures become structured tool errors (`credential_absent`, `params_invalid`, ...). */
 export function toolHandler(tool: ToolDefinition, deps: ToolDeps): ExtensionToolHandler {
-  return async ({ input }) => {
+  return async ({ input, trustedWorkspace }) => {
     try {
-      return await tool.handle(asObject(input), deps);
+      return await tool.handle(asObject(input), deps, trustedWorkspace?.root);
     } catch (error) {
       throw toolError(error);
     }

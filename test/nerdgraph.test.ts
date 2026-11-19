@@ -73,7 +73,7 @@ describe("credentials and region", () => {
   });
 });
 
-describe("factory-user-agents workspace defaults (NEW_RELIC_ACCOUNT_ID, NEW_RELIC_APP)", () => {
+describe("factory-user-agents workspace defaults (NEW_RELIC_ACCOUNT_ID)", () => {
   /** Polls newrelic/errors through the handler with a NerdGraph fetch spy that answers no rows. */
   async function pollErrors(with_: Record<string, unknown>, extraEnv: Record<string, string> = {}) {
     const sent: { id: number; q: string }[] = [];
@@ -104,35 +104,9 @@ describe("factory-user-agents workspace defaults (NEW_RELIC_ACCOUNT_ID, NEW_RELI
     const { run, sent } = await pollErrors({});
     const neither = await rejection(run);
     assert.equal(neither.data?.code, "source_params_invalid");
-    assert.equal(neither.message, "set with.account_id or NEW_RELIC_ACCOUNT_ID for this workspace");
+    assert.equal(neither.message, "set with.account_id, account_id in .compozy/newrelic.toml, or NEW_RELIC_ACCOUNT_ID");
     const bad = await pollErrors({}, { NEW_RELIC_ACCOUNT_ID: "31x" });
     assert.equal((await rejection(bad.run)).data?.code, "source_params_invalid");
     assert.equal(sent.length + bad.sent.length, 0);
-  });
-
-  test("UT-043 workspace defaults: {{app}} in with.where expands to NEW_RELIC_APP", async () => {
-    const env = { NEW_RELIC_ACCOUNT_ID: "317703", NEW_RELIC_APP: "report-portal-production" };
-    const { run, sent } = await pollErrors({ where: "appName = '{{app}}'" }, env);
-    await run;
-    assert.match(sent[0]?.q ?? "", /WHERE appName = 'report-portal-production' /);
-    assert.equal(sent[0]?.q.includes("{{app}}"), false);
-  });
-
-  test("UT-044 workspace defaults: {{app}} without NEW_RELIC_APP is params_invalid naming it", async () => {
-    const { run, sent } = await pollErrors({ account_id: ACCOUNT, where: "appName = '{{app}}'" });
-    const error = await rejection(run);
-    assert.equal(error.data?.code, "source_params_invalid");
-    assert.match(error.message, /NEW_RELIC_APP/);
-    assert.equal(sent.length, 0);
-  });
-
-  test("UT-045 workspace defaults: NEW_RELIC_APP with a quote or backslash is params_invalid; no query sent", async () => {
-    for (const app of ["a' OR 1=1 --", 'a"b', "a\\b"]) {
-      const { run, sent } = await pollErrors({ account_id: ACCOUNT, where: "appName = '{{app}}'" }, { NEW_RELIC_APP: app });
-      const error = await rejection(run);
-      assert.equal(error.data?.code, "source_params_invalid");
-      assert.equal(error.message.includes(app), false);
-      assert.equal(sent.length, 0);
-    }
   });
 });

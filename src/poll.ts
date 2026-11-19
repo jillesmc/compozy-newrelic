@@ -3,7 +3,7 @@ import type { HeartbeatSourceRequest, HeartbeatSourceResult } from "@compozy/ext
 import { SourceError, sourceError } from "./errors.ts";
 import { redactor } from "./items.ts";
 import { createNerdGraphClient, regionEndpoints, resolveApiKey } from "./nerdgraph.ts";
-import { applyWorkspaceDefaults } from "./params.ts";
+import { resolveProjectValues } from "./project-config.ts";
 import type { SourceDefinition } from "./sources/source.ts";
 
 export const POLL_BUDGET_MS = 25_000;
@@ -25,7 +25,7 @@ export function createPollHandler(source: SourceDefinition, deps: PollDeps = {})
   const stderr = deps.stderr ?? process.stderr;
   return async (request: HeartbeatSourceRequest): Promise<HeartbeatSourceResult> => {
     try {
-      const params = source.parse(applyWorkspaceDefaults(request.params, env));
+      const params = source.parse(resolveProjectValues(request.params, env, request.workspace?.root_dir));
       const apiKey = resolveApiKey(env);
       const client = createNerdGraphClient(params.region, apiKey, {
         fetch: deps.fetch,

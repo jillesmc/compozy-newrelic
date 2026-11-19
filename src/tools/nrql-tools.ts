@@ -3,7 +3,7 @@ import { isoUtc, truncateChars } from "../items.ts";
 import { normalizeMessage } from "../normalize.ts";
 import { parseWindow, requiredString, sinceClause } from "../params.ts";
 import { boundedResult, cell, flattenRow, renderLines, renderTable, type Row } from "./format.ts";
-import { ACCOUNT_PROPERTIES, accountId, type NerdGraphTool } from "./tool.ts";
+import { ACCOUNT_PROPERTIES, accountId, APP_PROPERTY, type NerdGraphTool } from "./tool.ts";
 
 export const MAX_NRQL_ROWS = 50;
 export const MAX_GROUPS = 25;
@@ -13,12 +13,13 @@ export const MAX_LOG_CHARS = 300;
 
 export const nrqlQueryTool: NerdGraphTool = {
   name: "nrql_query",
+  project: true,
   description:
     "Run a read-only NRQL query against one New Relic account and return up to 50 rows as a compact table.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["nrql", "account_id"],
+    required: ["nrql"],
     properties: { ...ACCOUNT_PROPERTIES, nrql: { type: "string", minLength: 1, maxLength: 4000 } },
   },
   async run(input, ctx) {
@@ -32,14 +33,15 @@ export const nrqlQueryTool: NerdGraphTool = {
 
 export const errorGroupsTool: NerdGraphTool = {
   name: "error_groups",
+  project: true,
   description:
     "Group recent TransactionError events by app, error class and normalized message; up to 25 groups, most frequent first.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["account_id"],
     properties: {
       ...ACCOUNT_PROPERTIES,
+      app: APP_PROPERTY,
       where: { type: "string", maxLength: 4000, description: "NRQL WHERE body, without the WHERE keyword" },
       window: { type: "string", pattern: "^[0-9]+(m|h)$", default: "30m" },
     },
@@ -80,14 +82,16 @@ export const errorGroupsTool: NerdGraphTool = {
 
 export const recentLogsTool: NerdGraphTool = {
   name: "recent_logs",
+  project: true,
   description:
     "Return the most recent New Relic log lines matching a NRQL WHERE filter: at most 50 lines, each message cut to 300 characters.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["account_id", "where"],
+    required: ["where"],
     properties: {
       ...ACCOUNT_PROPERTIES,
+      app: APP_PROPERTY,
       where: { type: "string", minLength: 1, maxLength: 4000, description: "NRQL WHERE body over Log" },
       window: { type: "string", pattern: "^[0-9]+(m|h)$", default: "15m" },
       limit: { type: "integer", minimum: 1, maximum: MAX_LOG_LINES, default: 20 },

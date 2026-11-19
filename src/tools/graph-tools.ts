@@ -73,12 +73,12 @@ export const searchEntitiesTool: NerdGraphTool = {
 
 export const alertIssuesTool: NerdGraphTool = {
   name: "alert_issues",
+  project: true,
   description:
     "List New Relic alert issues of one account (open by default), highest priority and newest first; up to 25.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["account_id"],
     properties: {
       ...ACCOUNT_PROPERTIES,
       state: { type: "string", enum: Object.keys(STATES), default: "open" },

@@ -14,6 +14,8 @@ export const WINDOW_PATTERN = "^[0-9]+(m|h)$";
 /** JSON Schema properties shared by every kind's params schema (spread into `properties`). */
 export const COMMON_PROPERTIES = {
   account_id: { type: "integer", minimum: 1 },
+  /** Fills `{{app}}` in `with.where`; defaults to `app` in `.compozy/newrelic.toml` (project-config.ts). */
+  app: { type: "string", minLength: 1, maxLength: 256 },
   region: { type: "string", pattern: REGION_PATTERN, default: "us" },
   notify_existing: { type: "boolean", default: false },
 } as const;
@@ -24,38 +26,13 @@ export function asObject(raw: unknown): Record<string, unknown> {
 
 export function parseCommon(raw: Record<string, unknown>): CommonParams {
   const accountId = raw.account_id;
-  if (accountId === undefined) throw paramsError("set with.account_id or NEW_RELIC_ACCOUNT_ID for this workspace");
+  if (accountId === undefined) throw paramsError("set with.account_id, account_id in .compozy/newrelic.toml, or NEW_RELIC_ACCOUNT_ID");
   if (typeof accountId !== "number" || !Number.isSafeInteger(accountId) || accountId < 1) {
     throw paramsError("set with.account_id to your New Relic account id (a positive integer)");
   }
   const notifyExisting = raw.notify_existing ?? false;
   if (typeof notifyExisting !== "boolean") throw paramsError("notify_existing must be true or false");
   return { accountId, region: parseRegion(raw.region), notifyExisting };
-}
-
-/**
- * Per-workspace defaults (ADR-002 of factory-user-agents): `NEW_RELIC_ACCOUNT_ID` fills an absent
- * `with.account_id` (an explicit value always wins) and `NEW_RELIC_APP` replaces `{{app}}` in
- * `with.where`. No other templating. Runs before `parse`, so fingerprints see the resolved values.
- */
-export function applyWorkspaceDefaults(raw: unknown, env: Record<string, string | undefined>): unknown {
-  const obj = asObject(raw);
-  if (obj !== raw) return raw; // not an object: let parse report it
-  const out = { ...obj };
-  const account = env.NEW_RELIC_ACCOUNT_ID?.trim();
-  if (out.account_id === undefined && account) {
-    if (!/^[1-9][0-9]{0,15}$/.test(account) || !Number.isSafeInteger(Number(account))) {
-      throw paramsError("NEW_RELIC_ACCOUNT_ID must be a positive integer");
-    }
-    out.account_id = Number(account);
-  }
-  if (typeof out.where === "string" && out.where.includes("{{app}}")) {
-    const app = env.NEW_RELIC_APP?.trim();
-    if (!app) throw paramsError("with.where uses {{app}}; set NEW_RELIC_APP for this workspace");
-    if (/['"\\]/.test(app)) throw paramsError("NEW_RELIC_APP must not contain quotes or backslashes");
-    out.where = out.where.replaceAll("{{app}}", app);
-  }
-  return out;
 }
 
 export function parseRegion(raw: unknown): Region {

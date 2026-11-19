@@ -6,6 +6,7 @@ import type { McpCatalog } from "../mcp-catalog.ts";
 import { createNerdGraphClient, regionEndpoints, resolveApiKey, type NerdGraphClient, type RegionEndpoints } from "../nerdgraph.ts";
 import { parseRegion, REGION_PATTERN } from "../params.ts";
 import { withBudget } from "../poll.ts";
+import { PROJECT_FILE, resolveProjectValues } from "../project-config.ts";
 
 /** Per-call budget for a tool (same as a source poll). */
 export const TOOL_BUDGET_MS = 25_000;
@@ -38,7 +39,8 @@ export interface ToolDefinition {
   description: string;
   inputSchema: JSONValue;
   command?: ExtensionToolOptions["command"];
-  handle(input: Record<string, unknown>, deps: ToolDeps): Promise<ToolResult | string>;
+  /** `root` is the call's `trustedWorkspace.root`; absent when the call has no trusted workspace. */
+  handle(input: Record<string, unknown>, deps: ToolDeps, root?: string): Promise<ToolResult | string>;
 }
 
 /** A NerdGraph-backed investigation tool; `run` gets a ready client (key checked before any I/O). */
@@ -46,19 +48,31 @@ export interface NerdGraphTool {
   name: string;
   description: string;
   inputSchema: JSONValue;
+  /** `account_id` (and `app` for `{{app}}` in `where`) default from the project file, then the env. */
+  project?: boolean;
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
 }
 
 export const REGION_PROPERTY = { type: "string", pattern: REGION_PATTERN, default: "us" } as const;
 export const ACCOUNT_PROPERTIES = {
-  account_id: { type: "integer", minimum: 1 },
+  account_id: {
+    type: "integer",
+    minimum: 1,
+    description: `Defaults to account_id in ${PROJECT_FILE} of the trusted workspace, then NEW_RELIC_ACCOUNT_ID`,
+  },
   region: REGION_PROPERTY,
+} as const;
+export const APP_PROPERTY = {
+  type: "string",
+  minLength: 1,
+  maxLength: 256,
+  description: `Fills {{app}} in where; defaults to app in ${PROJECT_FILE} of the trusted workspace`,
 } as const;
 
 export function accountId(input: Record<string, unknown>): number {
   const id = input.account_id;
   if (typeof id !== "number" || !Number.isSafeInteger(id) || id < 1) {
-    throw paramsError("account_id must be your New Relic account id (a positive integer)");
+    throw paramsError(`set account_id (a positive integer), account_id in ${PROJECT_FILE}, or NEW_RELIC_ACCOUNT_ID`);
   }
   return id;
 }
@@ -69,7 +83,8 @@ export function nerdgraphTool(tool: NerdGraphTool): ToolDefinition {
     name: tool.name,
     description: `${tool.description} Read-only; works with a New Relic User API key on any plan.`,
     inputSchema: tool.inputSchema,
-    async handle(input, deps) {
+    async handle(given, deps, root) {
+      const input = tool.project ? (resolveProjectValues(given, deps.env ?? {}, root, "") as Record<string, unknown>) : given;
       const region = parseRegion(input.region);
       const apiKey = resolveApiKey(deps.env ?? {});
       const redact = redactor(apiKey);

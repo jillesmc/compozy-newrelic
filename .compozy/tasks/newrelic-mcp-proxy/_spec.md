@@ -541,3 +541,33 @@ S2 and S3 can run in parallel after S1.
   pre-registered client; the proxy's `oauth_only` recovery keeps naming `newrelic-eu` for `region:
   eu`, which matches that manual name. Supersedes the `newrelic-eu` declaration in
   `newrelic-sources` (spec item 4, ADR-002 decision 2, US-104 AC-1).
+- **D-24 (2026-11-25, operator request for consumer-hosted signals such as a shared migration
+  library, recorded before coding): project placeholders and cross-account queries.** Extends the
+  per-project file (factory-roles ADR-004) and supersedes "`{{app}}` is the only placeholder" and
+  "keys: only `app` and `account_id`".
+  1. `.compozy/newrelic.toml` accepts, besides `app` and `account_id`: `accounts = [<id>, ...]`
+     (1 to 20 positive integers, one line, no trailing comma) and any other key holding a string.
+     A non-`app` string value must not contain `;` (no second statement) or `{{` / `}}` (no nested
+     placeholder); the line grammar already excludes newlines. Values are inserted verbatim: the
+     operator owns the file. `app` keeps its rules (no quotes or backslashes, at most 256).
+  2. Placeholders `{{<key>}}` expand in `where` and `facet` of a source's `with` (and of a tool
+     input) from every string key of the file; `with.app` / `app` still wins for `{{app}}`.
+     Expansion is a single literal pass (an inserted value is never re-expanded). Any `{{...}}` that
+     names a key the file does not set (including `{{app}}` with no app anywhere) makes a source
+     return no items with its committed state unchanged and write one stderr line
+     `newrelic/<kind> skipped: <reason>` (key names only, never values); no query is sent. A tool
+     fails with `tool_invalid_input` and the same reason. This replaces the 0.4.0 behavior where a
+     source with an unresolved `{{app}}` failed with `source_params_invalid`.
+  3. Account resolution, first hit wins: explicit `account_id` → explicit `account_ids` (sources and
+     the `nrql_query` / `recent_logs` tools; 1 to 20 ids) → file `accounts` → file `account_id` →
+     `NEW_RELIC_ACCOUNT_ID`. Single-account tools (`alert_issues`, `error_groups`) skip both
+     `accounts` steps. Ids are sorted and de-duplicated. One id behaves exactly as before (same
+     query `actor.account(id).nrql`, same keys, same fingerprint `account_id`). Two or more run the
+     NRQL once through `actor.nrql(accounts: [...])`; the fingerprint then holds `account_ids`.
+  4. Cross-account keys: `newrelic/logs` and `newrelic/errors` prepend `accountId()` to their FACET
+     and key items `<account>/<facet tuple>` (`<account>/all` without a facet), so the same group in
+     two accounts gives two items, each naming its own account. `newrelic/issues` queries each
+     account in turn and keys `<account>/<issue id>`. `newrelic/nrql` runs the user's NRQL as is
+     (add `FACET accountId()` to split by account); its items list every queried account.
+  5. `facet` already accepts several attributes (`service_name, step`): the facet tuple joins with
+     `/` in the key, as before.

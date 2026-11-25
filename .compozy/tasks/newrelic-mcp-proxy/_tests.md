@@ -41,6 +41,12 @@
 - **UT-171** (state): state `unknown` is re-probed at most once per minute.
 - **UT-180** (happy): nested aggregates are flattened to dotted keys, to a depth of 3.
 - **UT-190** (error): a key echoed in the remote text or error is redacted.
+- **UT-200** (happy, D-24): `{{key}}` in `where` and `facet` expands from any string key of the project file, literally and in one pass (sources and tools).
+- **UT-201** (edge, D-24): a placeholder whose key nobody sets (including `{{app}}`) makes a source return no items with its state unchanged, one `skipped` stderr line and no request; a tool fails with `tool_invalid_input`.
+- **UT-202** (error, D-24): `;`, `{{` or `}}` in a string value, a non-string custom key and a bad `accounts` list are refused naming the file.
+- **UT-203** (happy, D-24): account resolution order (explicit `account_id` → `account_ids` → file `accounts` → file `account_id` → env); two or more ids use the cross-account query; single-account tools skip `accounts`.
+- **UT-204** (happy, D-24): cross-account `logs`, `errors` and `issues` items are keyed and labelled per account; `nrql` runs the NRQL as written.
+- **UT-205** (regression, D-24): a workspace with only `app` and `account_id` gives the v0.5.0 requests, items and state byte for byte.
 
 ## Integration Tests (fake MCP)
 

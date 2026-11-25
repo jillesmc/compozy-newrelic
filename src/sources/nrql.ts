@@ -4,7 +4,15 @@ import { fingerprint, sortRows, transition, type Signal } from "../engine.ts";
 import { paramsError, sourceError } from "../errors.ts";
 import { formatNumber, isoUtc, redactDeep, shapeItem, truncateChars } from "../items.ts";
 import { sanitizeKey } from "../normalize.ts";
-import { asObject, COMMON_PROPERTIES, parseCommon, requiredNumber, requiredString } from "../params.ts";
+import {
+  accountFingerprint,
+  accountsText,
+  asObject,
+  COMMON_PROPERTIES,
+  parseCommon,
+  requiredNumber,
+  requiredString,
+} from "../params.ts";
 import type { ParsedParams, SourceContext, SourceDefinition } from "./source.ts";
 
 export interface NrqlParams extends ParsedParams {
@@ -43,7 +51,7 @@ export function parseNrqlParams(raw: unknown): NrqlParams {
   const threshold = requiredNumber(obj.threshold, "threshold");
   const fp = fingerprint({
     kind: "nrql",
-    account_id: common.accountId,
+    ...accountFingerprint(common),
     region: common.region,
     nrql,
     condition,
@@ -176,11 +184,11 @@ function nrqlItem(
       : [formatNumber(params.threshold), formatNumber(value)];
   const breach = `${params.condition} ${shownThreshold}: ${shownValue}`;
   const title = facetText
-    ? `${facetText} ${breach} (${read.label}, account ${params.accountId})`
-    : `${read.label} ${breach} (account ${params.accountId})`;
+    ? `${facetText} ${breach} (${read.label}, ${accountsText(params)})`
+    : `${read.label} ${breach} (${accountsText(params)})`;
   const summary = [
     "NRQL threshold breach",
-    `account ${params.accountId} (${params.region})`,
+    `${accountsText(params)} (${params.region})`,
     `${read.label} ${breach}`,
     ...(facetText ? [`facet: ${facetText}`] : []),
     `checked ${isoUtc(now)}`,
@@ -192,7 +200,7 @@ function nrqlItem(
     url: context.endpoints.web,
     attributes: {
       kind: "nrql",
-      account_id: params.accountId,
+      ...(params.accountIds.length > 1 ? { account_ids: params.accountIds } : { account_id: params.accountId }),
       region: params.region,
       condition: params.condition,
       threshold: params.threshold,
@@ -210,7 +218,7 @@ async function pollNrql(
   params: NrqlParams,
   context: SourceContext
 ): Promise<HeartbeatSourceResult> {
-  const rows = await context.client.nrql(params.accountId, params.nrql, context.signal);
+  const rows = await context.client.nrql(params.accountIds, params.nrql, context.signal);
   return transition({
     committed: request.state,
     fingerprint: params.fingerprint,

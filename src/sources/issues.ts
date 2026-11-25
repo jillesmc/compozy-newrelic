@@ -6,7 +6,7 @@ import { epochMs, fetchIssuePages, issuesQuery as sharedIssuesQuery, type IssueF
 import { redactDeep, shapeItem } from "../items.ts";
 import { issueUrl } from "../nerdgraph.ts";
 import { sanitizeKey } from "../normalize.ts";
-import { asObject, COMMON_PROPERTIES, parseCommon, stringListParam } from "../params.ts";
+import { accountFingerprint, asObject, COMMON_PROPERTIES, parseCommon, stringListParam } from "../params.ts";
 import type { ParsedParams, SourceContext, SourceDefinition } from "./source.ts";
 
 export { epochMs };
@@ -53,7 +53,7 @@ export function parseIssuesParams(raw: unknown): IssuesParams {
   const entityGuids = stringListParam(obj.entity_guids, "entity_guids", { pattern: ENTITY_GUID, fallback: [] });
   const fp = fingerprint({
     kind: "issues",
-    account_id: common.accountId,
+    ...accountFingerprint(common),
     region: common.region,
     priorities,
     entity_guids: entityGuids,
@@ -70,13 +70,20 @@ function issueFilter(params: IssuesParams): IssueFilter {
   return { states: OPEN_STATES, priorities: params.priorities, entityGuids: params.entityGuids };
 }
 
-/** Every page of open issues, following `nextCursor` until it is empty (IT-002). */
+/**
+ * Every page of open issues, following `nextCursor` until it is empty (IT-002). With several accounts
+ * each is read in turn and every issue is tagged with its `accountId` (D-24).
+ */
 export async function fetchIssues(params: IssuesParams, context: SourceContext): Promise<Record<string, unknown>[]> {
-  const { issues, more } = await fetchIssuePages(
-    context.client, params.accountId, issueFilter(params), context.signal, MAX_ISSUE_PAGES
-  );
-  if (more) throw paramsError(PAGES_MESSAGE);
-  return issues;
+  const all: Record<string, unknown>[] = [];
+  for (const accountId of params.accountIds) {
+    const { issues, more } = await fetchIssuePages(
+      context.client, accountId, issueFilter(params), context.signal, MAX_ISSUE_PAGES
+    );
+    if (more) throw paramsError(PAGES_MESSAGE);
+    all.push(...(params.accountIds.length > 1 ? issues.map(issue => ({ ...issue, accountId })) : issues));
+  }
+  return all;
 }
 
 const strings = (raw: unknown): string[] =>
@@ -96,13 +103,18 @@ export function issuesSignals(
     const openedMs = epochMs(issue.activatedAt) ?? epochMs(issue.createdAt);
     // Priority weight dominates; within a priority an older activation ranks higher (ms < 1e13).
     const rank = PRIORITIES.indexOf(priority as (typeof PRIORITIES)[number]) * 1e13 - (openedMs ?? 0);
-    signals.push({ key: sanitizeKey(id), rank, item: issueItem(id, issue, priority, openedMs, params, context) });
+    const cross = params.accountIds.length > 1;
+    const account = cross && typeof issue.accountId === "number" ? issue.accountId : params.accountId;
+    const key = sanitizeKey(cross ? `${account}/${id}` : id);
+    signals.push({ key, rank, item: issueItem(key, id, account, issue, priority, openedMs, params, context) });
   }
   return signals;
 }
 
 function issueItem(
+  key: string,
   id: string,
+  account: number,
   issue: Record<string, unknown>,
   priority: string,
   openedMs: number | null,
@@ -114,20 +126,20 @@ function issueItem(
   const opened = openedMs === null ? null : new Date(openedMs).toISOString();
   const state = String(issue.state);
   return shapeItem({
-    key: sanitizeKey(id),
+    key,
     title: `${priority} issue: ${title}`,
     summary: [
       "New Relic alert issue",
-      `account ${params.accountId} (${params.region})`,
+      `account ${account} (${params.region})`,
       `priority ${priority}`,
       `state ${state}`,
       ...(entities ? [`entities: ${entities}`] : []),
       ...(opened ? [`activated ${opened}`] : []),
     ].join(" · "),
-    url: issueUrl(context.endpoints, params.accountId, id) ?? context.endpoints.web,
+    url: issueUrl(context.endpoints, account, id) ?? context.endpoints.web,
     attributes: {
       kind: "issues",
-      account_id: params.accountId,
+      account_id: account,
       region: params.region,
       issue_id: id,
       priority,

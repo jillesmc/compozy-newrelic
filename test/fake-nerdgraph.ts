@@ -142,6 +142,7 @@ export async function startFakeNerdGraph(
     if (!/^NRAK-\S+$/.test(String(req.headers["api-key"] ?? ""))) return send(401, { errors: [{ message: "unauthorized" }] });
     const id = body.variables?.id;
     if (body.query?.includes("aiIssues")) return send(200, { data: { actor: { account: { id, aiIssues: { issues: issuePage(fake, body.query) } } } } });
+    if (body.variables?.ids) return send(200, { data: { actor: { nrql: { results: fake.rows } } } }); // cross-account (D-24)
     send(200, { data: { actor: { account: { id, nrql: { results: fake.rows } } } } });
   });
   await new Promise<void>(resolve => server.listen(options.port ?? 0, "127.0.0.1", resolve));

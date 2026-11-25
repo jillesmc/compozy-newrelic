@@ -1,9 +1,14 @@
 import { paramsError } from "./errors.ts";
 import type { Region } from "./nerdgraph.ts";
 
+export const MAX_ACCOUNTS = 20;
+
 /** Parameters every kind accepts. `notifyExisting` never enters the fingerprint. */
 export interface CommonParams {
+  /** The first (lowest) of `accountIds`; the only one unless the source is cross-account. */
   accountId: number;
+  /** Sorted, unique, at least one; two or more query cross-account (D-24). */
+  accountIds: number[];
   region: Region;
   notifyExisting: boolean;
 }
@@ -14,6 +19,8 @@ export const WINDOW_PATTERN = "^[0-9]+(m|h)$";
 /** JSON Schema properties shared by every kind's params schema (spread into `properties`). */
 export const COMMON_PROPERTIES = {
   account_id: { type: "integer", minimum: 1 },
+  /** Cross-account (D-24); defaults to `accounts` in `.compozy/newrelic.toml`. `account_id` wins. */
+  account_ids: { type: "array", items: { type: "integer", minimum: 1 }, minItems: 1, maxItems: MAX_ACCOUNTS },
   /** Fills `{{app}}` in `with.where`; defaults to `app` in `.compozy/newrelic.toml` (project-config.ts). */
   app: { type: "string", minLength: 1, maxLength: 256 },
   region: { type: "string", pattern: REGION_PATTERN, default: "us" },
@@ -25,14 +32,40 @@ export function asObject(raw: unknown): Record<string, unknown> {
 }
 
 export function parseCommon(raw: Record<string, unknown>): CommonParams {
-  const accountId = raw.account_id;
-  if (accountId === undefined) throw paramsError("set with.account_id, account_id in .compozy/newrelic.toml, or NEW_RELIC_ACCOUNT_ID");
-  if (typeof accountId !== "number" || !Number.isSafeInteger(accountId) || accountId < 1) {
-    throw paramsError("set with.account_id to your New Relic account id (a positive integer)");
-  }
+  const accountIds = accountIdsOf(raw, "set with.account_id to your New Relic account id (a positive integer)", "with.");
+  if (!accountIds) throw paramsError("set with.account_id, account_id in .compozy/newrelic.toml, or NEW_RELIC_ACCOUNT_ID");
   const notifyExisting = raw.notify_existing ?? false;
   if (typeof notifyExisting !== "boolean") throw paramsError("notify_existing must be true or false");
-  return { accountId, region: parseRegion(raw.region), notifyExisting };
+  return { accountId: accountIds[0]!, accountIds, region: parseRegion(raw.region), notifyExisting };
+}
+
+const isAccountId = (id: unknown): id is number => typeof id === "number" && Number.isSafeInteger(id) && id >= 1;
+
+/**
+ * `account_id` (wins) or `account_ids` as sorted unique ids; undefined when neither is set. `invalid`
+ * is the message for a bad `account_id`; `prefix` names the parameters (`with.` for sources).
+ */
+export function accountIdsOf(raw: Record<string, unknown>, invalid: string, prefix: string): number[] | undefined {
+  if (raw.account_id !== undefined) {
+    if (!isAccountId(raw.account_id)) throw paramsError(invalid);
+    return [raw.account_id];
+  }
+  const ids = raw.account_ids;
+  if (ids === undefined) return undefined;
+  if (!Array.isArray(ids) || ids.length < 1 || ids.length > MAX_ACCOUNTS || !ids.every(isAccountId)) {
+    throw paramsError(`${prefix}account_ids must be a list of 1 to ${MAX_ACCOUNTS} account ids (positive integers)`);
+  }
+  return [...new Set(ids)].sort((a, b) => a - b);
+}
+
+/** Fingerprint fields for the accounts: `account_id` for one (unchanged since 0.1), else `account_ids`. */
+export function accountFingerprint(params: CommonParams): Record<string, unknown> {
+  return params.accountIds.length > 1 ? { account_ids: params.accountIds } : { account_id: params.accountId };
+}
+
+/** `account 1234567`, or `accounts 1234567, 7654321` cross-account, for item text. */
+export function accountsText(params: Pick<CommonParams, "accountIds">): string {
+  return `${params.accountIds.length > 1 ? "accounts" : "account"} ${params.accountIds.join(", ")}`;
 }
 
 export function parseRegion(raw: unknown): Region {

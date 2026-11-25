@@ -4,6 +4,7 @@ import { fingerprint, sortRows, transition, type Signal } from "../engine.ts";
 import { paramsError } from "../errors.ts";
 import { formatNumber, isoUtc, redactDeep, shapeItem, truncateChars } from "../items.ts";
 import {
+  accountFingerprint,
   asObject,
   COMMON_PROPERTIES,
   integerParam,
@@ -13,7 +14,7 @@ import {
   sinceClause,
   WINDOW_PATTERN,
 } from "../params.ts";
-import { countOf, facetOf, MAX_NRQL_ROWS, nrqlKey } from "./nrql.ts";
+import { countOf, facetOf, MAX_NRQL_ROWS, NO_FACET_KEY, nrqlKey } from "./nrql.ts";
 import type { ParsedParams, SourceContext, SourceDefinition } from "./source.ts";
 
 export interface LogsParams extends ParsedParams {
@@ -49,7 +50,7 @@ export function parseLogsParams(raw: unknown): LogsParams {
   const threshold = integerParam(obj.threshold, "threshold", 0);
   const fp = fingerprint({
     kind: "logs",
-    account_id: common.accountId,
+    ...accountFingerprint(common),
     region: common.region,
     where,
     facet,
@@ -59,10 +60,12 @@ export function parseLogsParams(raw: unknown): LogsParams {
   return { ...common, where, facet, windowMinutes, windowText, threshold, fingerprint: fp };
 }
 
+/** Cross-account (D-24): `accountId()` leads the FACET, so each account is its own group. */
 export function logsNrql(params: LogsParams): string {
+  const facet = params.accountIds.length > 1 ? ["accountId()", ...(params.facet ? [params.facet] : [])] : params.facet ? [params.facet] : [];
   return [
     `SELECT count(*) FROM Log WHERE ${params.where}`,
-    ...(params.facet ? [`FACET ${params.facet}`] : []),
+    ...(facet.length ? [`FACET ${facet.join(", ")}`] : []),
     sinceClause(params.windowMinutes),
     `LIMIT ${MAX_NRQL_ROWS + 1}`, // one extra row makes truncation detectable (D-S2-c)
   ].join(" ");
@@ -79,16 +82,23 @@ export function logsSignals(
     throw paramsError(`logs returned more than ${MAX_NRQL_ROWS} rows; narrow with.where or with.facet`);
   }
   const byKey = new Map<string, Signal>();
+  const cross = params.accountIds.length > 1;
   for (const row of sortRows(redactDeep(rows, context.redact))) {
     const count = countOf(row);
-    const facet = facetOf(row);
+    const tuple = facetOf(row);
     if (!(count > params.threshold)) continue;
+    // Cross-account rows lead with the account (D-24); keys become `<account>/<group or all>`.
+    const [account, facet] = cross ? [Number(tuple?.[0]) || params.accountId, tuple?.slice(1) ?? null] : [params.accountId, tuple];
     // Only the facet value is kept: log rows never contribute raw line text (Business Rule 10).
-    const group = params.facet && facet ? facet.join("/") : null;
-    const key = nrqlKey(group === null ? null : [group]);
+    const group = params.facet && facet?.length ? facet.join("/") : null;
+    const key = cross ? nrqlKey([String(account), group ?? NO_FACET_KEY]) : nrqlKey(group === null ? null : [group]);
     const previous = byKey.get(key);
     if (previous && previous.rank >= count - params.threshold) continue;
-    byKey.set(key, { key, rank: count - params.threshold, item: logsItem(key, group, count, params, request.now, context) });
+    byKey.set(key, {
+      key,
+      rank: count - params.threshold,
+      item: logsItem(key, group, count, account, params, request.now, context),
+    });
   }
   return [...byKey.values()];
 }
@@ -97,6 +107,7 @@ function logsItem(
   key: string,
   group: string | null,
   count: number,
+  account: number,
   params: LogsParams,
   now: string,
   context: Pick<SourceContext, "endpoints" | "redact">
@@ -108,7 +119,7 @@ function logsItem(
     title: `${group ?? "all logs"}: ${lines}`,
     summary: [
       "Log spike",
-      `account ${params.accountId} (${params.region})`,
+      `account ${account} (${params.region})`,
       lines,
       ...(group !== null ? [`${facet}: ${group}`] : []),
       `checked ${isoUtc(now)}`,
@@ -116,7 +127,7 @@ function logsItem(
     url: context.endpoints.web,
     attributes: {
       kind: "logs",
-      account_id: params.accountId,
+      account_id: account,
       region: params.region,
       facet,
       group,
@@ -134,7 +145,7 @@ async function pollLogs(
   params: LogsParams,
   context: SourceContext
 ): Promise<HeartbeatSourceResult> {
-  const rows = await context.client.nrql(params.accountId, logsNrql(params), context.signal);
+  const rows = await context.client.nrql(params.accountIds, logsNrql(params), context.signal);
   return transition({
     committed: request.state,
     fingerprint: params.fingerprint,

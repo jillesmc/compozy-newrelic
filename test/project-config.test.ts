@@ -37,11 +37,12 @@ function spy() {
 /** Polls newrelic/errors in workspace `root` with `with_` and extra env. */
 async function poll(root: string, with_: Record<string, unknown>, extraEnv: Record<string, string> = {}) {
   const { sent, fetch } = spy();
+  const lines: string[] = [];
   const env = { NEW_RELIC_API_KEY: FAKE_KEY, ...extraEnv };
-  const run = createPollHandler(errorsSource, { env, fetch, stderr: { write: () => true } })(
+  const run = createPollHandler(errorsSource, { env, fetch, stderr: { write: (line: string) => lines.push(line) } })(
     pollRequest(with_, null, { kind: "errors", workspace: { id: "ws_test", root_dir: root } })
   );
-  return { run, sent };
+  return { run, sent, lines };
 }
 
 const WHERE = "appName = '{{app}}'";
@@ -57,11 +58,10 @@ describe("factory-roles per-project file (.compozy/newrelic.toml)", () => {
     }
   });
 
-  test("UT-022 project file: {{app}} with no file and no with.app is source_params_invalid; NEW_RELIC_APP is ignored", async () => {
-    const { run, sent } = await poll(workspace(), { account_id: 1, where: WHERE }, { NEW_RELIC_APP: "other" });
-    const error = await rejection(run);
-    assert.equal(error.data?.code, "source_params_invalid");
-    assert.equal(error.message, "with.where uses {{app}}; set app in .compozy/newrelic.toml or with.app");
+  test("UT-022 project file: {{app}} with no file and no with.app yields no items and no query (D-24); NEW_RELIC_APP is ignored", async () => {
+    const { run, sent, lines } = await poll(workspace(), { account_id: 1, where: WHERE }, { NEW_RELIC_APP: "other" });
+    assert.deepEqual(await run, { items: [], state: null, more: false });
+    assert.deepEqual(lines, ["newrelic/errors skipped: with.where uses {{app}}; set app in .compozy/newrelic.toml or with.app\n"]);
     assert.equal(sent.length, 0);
   });
 
@@ -127,13 +127,13 @@ describe("factory-roles per-project file (.compozy/newrelic.toml)", () => {
 
   test("UT-036 project file: a malformed file is source_params_invalid naming the path; no query", async () => {
     const cases: Array<[string, RegExp]> = [
-      ["app = acme\n", /line 1: expected key = "string" or key = integer/],
+      ["app = acme\n", /line 1: expected key = "string", key = integer or accounts = \[integers\]/],
       ['[newrelic]\napp = "acme"\n', /line 1: expected/],
       ['account_id = "123"\n', /account_id must be a positive integer/],
       ["account_id = 0\n", /account_id must be a positive integer/],
       ["app = 5\n", /app must be a string/],
       ['app = "a"\napp = "b"\n', /line 2: duplicate key app/],
-      ['app_name = "acme"\n', /line 1: unknown key app_name/],
+      ["app_name = 5\n", /line 1: app_name must be a string \(only account_id and accounts take numbers\)/],
       ['app = ""\n', /app must be a non-empty string/],
     ];
     for (const [toml, reason] of cases) {

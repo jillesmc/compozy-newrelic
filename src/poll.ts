@@ -3,7 +3,7 @@ import type { HeartbeatSourceRequest, HeartbeatSourceResult } from "@compozy/ext
 import { SourceError, sourceError } from "./errors.ts";
 import { redactor } from "./items.ts";
 import { createNerdGraphClient, regionEndpoints, resolveApiKey } from "./nerdgraph.ts";
-import { resolveProjectValues } from "./project-config.ts";
+import { MissingPlaceholderError, resolveProjectValues } from "./project-config.ts";
 import type { SourceDefinition } from "./sources/source.ts";
 
 export const POLL_BUDGET_MS = 25_000;
@@ -18,7 +18,8 @@ export interface PollDeps {
 
 /**
  * Wraps a source kind into a daemon poll handler: params, key check (no network), client, a 25 s
- * budget, and one stderr line per failure with code and HTTP status only.
+ * budget, and one stderr line per failure with code and HTTP status only. A `{{key}}` the workspace
+ * does not set yields no items and keeps the committed state (D-24).
  */
 export function createPollHandler(source: SourceDefinition, deps: PollDeps = {}) {
   const env = deps.env ?? {}; // index.ts passes the process environment; nothing else reads it
@@ -36,6 +37,11 @@ export function createPollHandler(source: SourceDefinition, deps: PollDeps = {})
         source.poll(request, params, { ...context, signal })
       );
     } catch (error) {
+      if (error instanceof MissingPlaceholderError) {
+        // D-24: an optional source whose key this workspace does not set is a quiet no-op.
+        stderr.write(`newrelic/${source.kind} skipped: ${error.message}\n`);
+        return { items: [], state: request.state, more: false };
+      }
       const failure =
         error instanceof SourceError
           ? error

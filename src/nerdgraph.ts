@@ -7,7 +7,8 @@ export type Region = "us" | "eu" | `loopback:${number}`;
 
 export interface NerdGraphClient {
   query<T>(gql: string, variables: Record<string, unknown>, signal: AbortSignal): Promise<T>;
-  nrql(accountId: number, nrql: string, signal: AbortSignal): Promise<Record<string, unknown>[]>;
+  /** One account, or several (sorted, at least one): two or more query cross-account (D-24). */
+  nrql(accounts: number | readonly number[], nrql: string, signal: AbortSignal): Promise<Record<string, unknown>[]>;
 }
 
 export interface RegionEndpoints {
@@ -29,6 +30,9 @@ export const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_ERROR_CHARS = 300;
 export const NRQL_QUERY =
   "query($id:Int!,$q:Nrql!){actor{account(id:$id){nrql(query:$q,timeout:20){results}}}}";
+/** Cross-account NRQL (D-24): one query over several accounts; `accountId()` tells rows apart. */
+export const NRQL_CROSS_QUERY =
+  "query($ids:[Int!]!,$q:Nrql!){actor{nrql(accounts:$ids,query:$q,timeout:20){results}}}";
 
 export const MISSING_KEY_MESSAGE =
   "New Relic API key missing; run compozy extension secrets set newrelic --env NEW_RELIC_API_KEY";
@@ -109,19 +113,24 @@ export function createNerdGraphClient(
       throw sourceError("source_extension_failed", "New Relic request failed: unexpected response", status);
     }
     if (Array.isArray(body.errors) && body.errors.length > 0) {
-      throw graphqlError(body.errors as GraphQLError[], variables.id, redact);
+      throw graphqlError(body.errors as GraphQLError[], variables.id ?? variables.ids, redact);
     }
     return body.data as T;
   }
 
   return {
     query,
-    async nrql(accountId, nrql, signal) {
-      type Data = { actor?: { account?: { nrql?: { results?: unknown } } | null } };
-      const data = await query<Data>(NRQL_QUERY, { id: accountId, q: nrql }, signal);
-      const account = data?.actor?.account;
-      if (!account) throw accountError(accountId);
-      const results = account.nrql?.results;
+    async nrql(accounts, nrql, signal) {
+      type Results = { nrql?: { results?: unknown } | null } | null;
+      type Data = { actor?: { account?: Results } & Results };
+      const ids = typeof accounts === "number" ? [accounts] : accounts;
+      const cross = ids.length > 1;
+      const data = cross
+        ? await query<Data>(NRQL_CROSS_QUERY, { ids, q: nrql }, signal)
+        : await query<Data>(NRQL_QUERY, { id: ids[0], q: nrql }, signal);
+      const scope = cross ? data?.actor : data?.actor?.account;
+      if (!scope) throw accountError(cross ? ids : ids[0]);
+      const results = scope.nrql?.results;
       if (!Array.isArray(results)) {
         throw sourceError("source_extension_failed", "New Relic request failed: unexpected response");
       }
@@ -131,6 +140,9 @@ export function createNerdGraphClient(
 }
 
 export function accountError(accountId: unknown): SourceError {
+  if (Array.isArray(accountId)) {
+    return sourceError("source_params_invalid", `this API key cannot read every account of ${accountId.join(", ")}`);
+  }
   return sourceError("source_params_invalid", `this API key cannot read account ${String(accountId)}`);
 }
 
@@ -152,7 +164,7 @@ function graphqlError(errors: GraphQLError[], accountId: unknown, redact: (text:
     return sourceError("source_extension_failed", "New Relic request failed: query timed out");
   }
   const accessDenied = is("FORBIDDEN", () => /account/i.test(all) && /access|authori[sz]|permission|forbidden/i.test(all));
-  if (accessDenied && typeof accountId === "number") return accountError(accountId);
+  if (accessDenied && (typeof accountId === "number" || Array.isArray(accountId))) return accountError(accountId);
   const text = (redact(all) || "unknown error").slice(0, MAX_ERROR_CHARS);
   return sourceError("source_params_invalid", `New Relic rejected the query: ${text}`);
 }

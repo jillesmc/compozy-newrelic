@@ -5,6 +5,7 @@ import { paramsError } from "../errors.ts";
 import { formatNumber, isoUtc, redactDeep, shapeItem } from "../items.ts";
 import { normalizeMessage, sanitizeKey, sha256Hex } from "../normalize.ts";
 import {
+  accountFingerprint,
   asObject,
   COMMON_PROPERTIES,
   integerParam,
@@ -61,7 +62,7 @@ export function parseErrorsParams(raw: unknown): ErrorsParams {
   const minCount = integerParam(obj.min_count, "min_count", 1, 1);
   const fp = fingerprint({
     kind: "errors",
-    account_id: common.accountId,
+    ...accountFingerprint(common),
     region: common.region,
     where,
     event_types: eventTypes,
@@ -71,11 +72,12 @@ export function parseErrorsParams(raw: unknown): ErrorsParams {
   return { ...common, where, eventTypes, windowMinutes, windowText, minCount, fingerprint: fp };
 }
 
+/** Cross-account (D-24): `accountId()` leads the FACET, so each account is its own group. */
 export function errorsNrql(params: ErrorsParams): string {
   return [
     `SELECT count(*) FROM ${params.eventTypes.join(", ")}`,
     ...(params.where ? [`WHERE ${params.where}`] : []),
-    "FACET appName, error.class, error.message",
+    `FACET ${params.accountIds.length > 1 ? "accountId(), " : ""}appName, error.class, error.message`,
     sinceClause(params.windowMinutes),
     `LIMIT ${MAX_NRQL_ROWS + 1}`, // one extra row makes truncation detectable (D-S2-c)
   ].join(" ");
@@ -83,23 +85,35 @@ export function errorsNrql(params: ErrorsParams): string {
 
 interface ErrorType {
   key: string;
+  account: number;
   app: string;
   errorClass: string;
   message: string;
   count: number;
 }
 
-/** Business Rules 3–4: rows regrouped by app, class and normalized message, counts summed. */
-export function errorTypes(rows: Record<string, unknown>[], redact: (text: string) => string): ErrorType[] {
+/**
+ * Business Rules 3–4: rows regrouped by app, class and normalized message, counts summed. With
+ * several `accounts` the facet leads with the account and keys are `<account>/<app>/...` (D-24).
+ */
+export function errorTypes(
+  rows: Record<string, unknown>[],
+  redact: (text: string) => string,
+  accounts: Pick<ErrorsParams, "accountId" | "accountIds">
+): ErrorType[] {
   if (rows.length > MAX_NRQL_ROWS) {
     throw paramsError(`errors returned more than ${MAX_NRQL_ROWS} rows; narrow with.where`);
   }
   const byKey = new Map<string, ErrorType>();
   for (const row of sortRows(redactDeep(rows, redact))) {
-    const [app = "unknown", errorClass = "unknown", rawMessage = ""] = facetOf(row) ?? [];
+    const tuple = facetOf(row) ?? [];
+    const cross = accounts.accountIds.length > 1;
+    const account = cross ? Number(tuple.shift()) || accounts.accountId : accounts.accountId;
+    const [app = "unknown", errorClass = "unknown", rawMessage = ""] = tuple;
     const message = normalizeMessage(rawMessage);
-    const key = sanitizeKey(`${app}/${errorClass}/${sha256Hex(message).slice(0, 8)}`);
-    const entry = byKey.get(key) ?? { key, app, errorClass, message, count: 0 };
+    const raw = `${app}/${errorClass}/${sha256Hex(message).slice(0, 8)}`;
+    const key = sanitizeKey(cross ? `${account}/${raw}` : raw);
+    const entry = byKey.get(key) ?? { key, account, app, errorClass, message, count: 0 };
     entry.count += countOf(row);
     byKey.set(key, entry);
   }
@@ -112,7 +126,7 @@ export function errorsSignals(
   request: Pick<HeartbeatSourceRequest, "now">,
   context: Pick<SourceContext, "endpoints" | "redact">
 ): Signal[] {
-  return errorTypes(rows, context.redact)
+  return errorTypes(rows, context.redact, params)
     .filter(type => type.count >= params.minCount)
     .map(type => ({ key: type.key, rank: type.count - params.minCount, item: errorsItem(type, params, request.now, context) }));
 }
@@ -129,7 +143,7 @@ function errorsItem(
     title: `${type.errorClass} in ${type.app}: ${count} in ${params.windowText}`,
     summary: [
       "New error type",
-      `account ${params.accountId} (${params.region})`,
+      `account ${type.account} (${params.region})`,
       `${count} in ${params.windowText} (min ${params.minCount})`,
       `checked ${isoUtc(now)}`,
       `message: ${type.message}`,
@@ -137,7 +151,7 @@ function errorsItem(
     url: context.endpoints.web ? `${context.endpoints.web}/errors-inbox` : undefined,
     attributes: {
       kind: "errors",
-      account_id: params.accountId,
+      account_id: type.account,
       region: params.region,
       app: type.app,
       class: type.errorClass,
@@ -155,7 +169,7 @@ async function pollErrors(
   params: ErrorsParams,
   context: SourceContext
 ): Promise<HeartbeatSourceResult> {
-  const rows = await context.client.nrql(params.accountId, errorsNrql(params), context.signal);
+  const rows = await context.client.nrql(params.accountIds, errorsNrql(params), context.signal);
   return transition({
     committed: request.state,
     fingerprint: params.fingerprint,

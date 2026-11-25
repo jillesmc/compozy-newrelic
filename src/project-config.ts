@@ -2,7 +2,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "
 import { join } from "node:path";
 
 import { paramsError, SourceError } from "./errors.ts";
-import { asObject } from "./params.ts";
+import { asObject, MAX_ACCOUNTS } from "./params.ts";
 
 /** The per-project file this extension owns (factory-roles ADR-004), relative to a workspace root. */
 export const PROJECT_FILE = ".compozy/newrelic.toml";
@@ -11,37 +11,52 @@ const MAX_FILE_BYTES = 4096;
 export interface ProjectConfig {
   app?: string;
   accountId?: number;
+  /** `accounts = [..]`, sorted and de-duplicated (D-24). */
+  accounts?: number[];
+  /** Every string key (including `app`), the `{{key}}` placeholder values (D-24). */
+  vars: Record<string, string>;
 }
 
 /**
- * Reads `<root>/.compozy/newrelic.toml` (`app`, `account_id`). No root or no file → `{}`. Anything
- * else that is not exactly those keys as `key = "string"` / `key = <integer>` lines is refused naming
- * the path, so a typo never silently falls back to the env account.
+ * Reads `<root>/.compozy/newrelic.toml`: `app`, `account_id`, `accounts` and any other string key
+ * (D-24). No root or no file → no values. Any line that is not `key = "string"`, `key = <integer>` or
+ * `accounts = [<integers>]` is refused naming the path, so a typo never silently falls back to the env
+ * account.
  */
 export function readProjectConfig(root: string | undefined): ProjectConfig {
-  if (!root) return {};
+  if (!root) return { vars: {} };
   const text = readContained(root);
-  if (text === undefined) return {};
-  const config: ProjectConfig = {};
+  if (text === undefined) return { vars: {} };
+  const config: ProjectConfig = { vars: {} };
   const seen = new Set<string>();
   for (const [index, rawLine] of text.split(/\r?\n/).entries()) {
     const line = rawLine.trim();
     if (line === "" || line.startsWith("#")) continue;
-    const match = /^([A-Za-z0-9_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([0-9]+))\s*(?:#.*)?$/.exec(line);
-    if (!match) throw fileError(`line ${index + 1}: expected key = "string" or key = integer`);
+    const match =
+      /^([A-Za-z0-9_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([0-9]+)|\[\s*([0-9]+(?:\s*,\s*[0-9]+)*)?\s*\])\s*(?:#.*)?$/.exec(line);
+    if (!match) throw fileError(`line ${index + 1}: expected key = "string", key = integer or accounts = [integers]`);
     const key = match[1]!;
     if (seen.has(key)) throw fileError(`line ${index + 1}: duplicate key ${key}`);
     seen.add(key);
     const value = match[2] ?? match[3];
+    const isList = value === undefined && match[4] === undefined;
+    const list = isList ? (match[5]?.split(",").map(Number) ?? []) : undefined;
     if (key === "app") {
       if (value === undefined) throw fileError("app must be a string");
-      config.app = checkApp(value, `${PROJECT_FILE}: app`);
+      config.app = config.vars.app = checkApp(value, `${PROJECT_FILE}: app`);
     } else if (key === "account_id") {
       const id = match[4] === undefined ? NaN : Number(match[4]);
       if (!Number.isSafeInteger(id) || id < 1) throw fileError("account_id must be a positive integer");
       config.accountId = id;
+    } else if (key === "accounts") {
+      const valid = list && list.length >= 1 && list.length <= MAX_ACCOUNTS && list.every(id => Number.isSafeInteger(id) && id >= 1);
+      if (!valid) throw fileError(`accounts must be a list of 1 to ${MAX_ACCOUNTS} positive integers`);
+      config.accounts = [...new Set(list)].sort((a, b) => a - b);
     } else {
-      throw fileError(`line ${index + 1}: unknown key ${key} (expected app, account_id)`);
+      if (value === undefined) throw fileError(`line ${index + 1}: ${key} must be a string (only account_id and accounts take numbers)`);
+      // Inserted verbatim into NRQL (the operator owns the file): one statement, no nested placeholder.
+      if (/;|\{\{|\}\}/.test(value)) throw fileError(`${key} must not contain ;, {{ or }}`);
+      config.vars[key] = value;
     }
   }
   return config;
@@ -97,29 +112,53 @@ function absent(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
+/** A placeholder names a key nobody set: a source yields no items, a tool fails (D-24). */
+export class MissingPlaceholderError extends SourceError {
+  public constructor(message: string) {
+    super("source_params_invalid", message);
+  }
+}
+
+/** Fields whose `{{key}}` placeholders expand (D-24). */
+const PLACEHOLDER_FIELDS = ["where", "facet"] as const;
+const PLACEHOLDER = /\{\{(.*?)\}\}/g;
+
 /**
  * Resolves the project values of a source's `with` or a tool's input, first hit wins: explicit
- * `app`/`account_id` → `<root>/.compozy/newrelic.toml` → `NEW_RELIC_ACCOUNT_ID` (account only).
- * Expands `{{app}}` in `where` and drops `app`, so `parse` and fingerprints see resolved values.
- * `root` is the poll's `workspace.root_dir` or the tool call's `trustedWorkspace.root`; without it no
- * file is read. `prefix` is how the caller names its parameters (`with.` for sources).
+ * `app`/`account_id`/`account_ids` → `<root>/.compozy/newrelic.toml` (`accounts`, then `account_id`)
+ * → `NEW_RELIC_ACCOUNT_ID` (D-24). `multi: false` (single-account tools) skips both `accounts` steps.
+ * Expands `{{key}}` in `where` and `facet` and drops `app`, so `parse` and fingerprints see resolved
+ * values. `root` is the poll's `workspace.root_dir` or the tool call's `trustedWorkspace.root`;
+ * without it no file is read. `prefix` is how the caller names its parameters (`with.` for sources).
  */
 export function resolveProjectValues(
   raw: unknown,
   env: Record<string, string | undefined>,
   root: string | undefined,
-  prefix = "with."
+  prefix = "with.",
+  multi = true
 ): unknown {
   const obj = asObject(raw);
   if (obj !== raw) return raw; // not an object: let parse report it
   const { app: explicitApp, ...out } = obj;
   const file = readProjectConfig(root);
   if (explicitApp !== undefined && typeof explicitApp !== "string") throw paramsError(`${prefix}app must be a string`);
-  const app = explicitApp !== undefined ? checkApp(explicitApp.trim(), `${prefix}app`) : file.app;
-  if (out.account_id === undefined) out.account_id = file.accountId ?? envAccount(env);
-  if (typeof out.where === "string" && out.where.includes("{{app}}")) {
-    if (!app) throw paramsError(`${prefix}where uses {{app}}; set app in ${PROJECT_FILE} or ${prefix}app`);
-    out.where = out.where.replaceAll("{{app}}", () => app); // literal: no $& / $` directives (review N-1)
+  const vars = { ...file.vars };
+  if (explicitApp !== undefined) vars.app = checkApp(explicitApp.trim(), `${prefix}app`);
+  if (out.account_id === undefined && !(multi && out.account_ids !== undefined)) {
+    if (multi && file.accounts) out.account_ids = file.accounts;
+    else out.account_id = file.accountId ?? envAccount(env);
+  }
+  for (const field of PLACEHOLDER_FIELDS) {
+    const text = out[field];
+    if (typeof text !== "string" || !text.includes("{{")) continue;
+    for (const [, key] of text.matchAll(PLACEHOLDER)) {
+      if (Object.hasOwn(vars, key!)) continue;
+      const where = key === "app" ? ` or ${prefix}app` : "";
+      throw new MissingPlaceholderError(`${prefix}${field} uses {{${key}}}; set ${key} in ${PROJECT_FILE}${where}`);
+    }
+    // One literal pass: no $& / $` directives (review N-1), and inserted values are never re-expanded.
+    out[field] = text.replace(PLACEHOLDER, (_, key: string) => vars[key]!);
   }
   return out;
 }

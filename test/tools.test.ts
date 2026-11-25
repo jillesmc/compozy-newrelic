@@ -26,8 +26,10 @@ function context(answer: (call: Call) => unknown): { ctx: ToolContext; calls: Ca
       calls.push(call);
       return structuredClone(answer(call)) as T;
     },
-    async nrql(id: number, nrql: string) {
-      const call = { gql: nrql, variables: { id } };
+    async nrql(accounts: number | readonly number[], nrql: string) {
+      // The client sends one account as `id` and several as `ids` (D-24); mirror that here.
+      const ids = typeof accounts === "number" ? [accounts] : [...accounts];
+      const call = { gql: nrql, variables: ids.length === 1 ? { id: ids[0] } : { ids } };
       calls.push(call);
       return structuredClone(answer(call)) as Record<string, unknown>[];
     },

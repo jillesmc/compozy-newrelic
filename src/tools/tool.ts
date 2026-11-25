@@ -4,7 +4,7 @@ import { paramsError } from "../errors.ts";
 import { redactDeep, redactor } from "../items.ts";
 import type { McpCatalog } from "../mcp-catalog.ts";
 import { createNerdGraphClient, regionEndpoints, resolveApiKey, type NerdGraphClient, type RegionEndpoints } from "../nerdgraph.ts";
-import { parseRegion, REGION_PATTERN } from "../params.ts";
+import { accountIdsOf, MAX_ACCOUNTS, parseRegion, REGION_PATTERN } from "../params.ts";
 import { withBudget } from "../poll.ts";
 import { PROJECT_FILE, resolveProjectValues } from "../project-config.ts";
 
@@ -50,6 +50,8 @@ export interface NerdGraphTool {
   inputSchema: JSONValue;
   /** `account_id` (and `app` for `{{app}}` in `where`) default from the project file, then the env. */
   project?: boolean;
+  /** Accepts `account_ids` and defaults to `accounts` in the project file (D-24). */
+  multiAccount?: boolean;
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
 }
 
@@ -62,6 +64,24 @@ export const ACCOUNT_PROPERTIES = {
   },
   region: REGION_PROPERTY,
 } as const;
+/** `account_id` plus `account_ids` for the cross-account tools (D-24). */
+export const MULTI_ACCOUNT_PROPERTIES = {
+  account_id: {
+    type: "integer",
+    minimum: 1,
+    description: "One account; wins over account_ids",
+  },
+  account_ids: {
+    type: "array",
+    items: { type: "integer", minimum: 1 },
+    minItems: 1,
+    maxItems: MAX_ACCOUNTS,
+    description:
+      `Query these accounts at once (cross-account NRQL). Without account_id or account_ids: accounts in ${PROJECT_FILE} ` +
+      "of the trusted workspace, then its account_id, then NEW_RELIC_ACCOUNT_ID",
+  },
+  region: REGION_PROPERTY,
+} as const;
 export const APP_PROPERTY = {
   type: "string",
   minLength: 1,
@@ -69,12 +89,19 @@ export const APP_PROPERTY = {
   description: `Fills {{app}} in where; defaults to app in ${PROJECT_FILE} of the trusted workspace`,
 } as const;
 
+const ACCOUNT_MESSAGE = `set account_id (a positive integer), account_id in ${PROJECT_FILE}, or NEW_RELIC_ACCOUNT_ID`;
+
 export function accountId(input: Record<string, unknown>): number {
   const id = input.account_id;
-  if (typeof id !== "number" || !Number.isSafeInteger(id) || id < 1) {
-    throw paramsError(`set account_id (a positive integer), account_id in ${PROJECT_FILE}, or NEW_RELIC_ACCOUNT_ID`);
-  }
+  if (typeof id !== "number" || !Number.isSafeInteger(id) || id < 1) throw paramsError(ACCOUNT_MESSAGE);
   return id;
+}
+
+/** `account_id` (wins) or `account_ids`, sorted and unique (D-24). */
+export function accountIds(input: Record<string, unknown>): number[] {
+  const ids = accountIdsOf(input, ACCOUNT_MESSAGE, "");
+  if (!ids) throw paramsError(ACCOUNT_MESSAGE);
+  return ids;
 }
 
 /** Wraps a NerdGraph tool: region, key (no network when absent), redacting client, 25 s budget. */
@@ -84,7 +111,9 @@ export function nerdgraphTool(tool: NerdGraphTool): ToolDefinition {
     description: `${tool.description} Read-only; works with a New Relic User API key on any plan.`,
     inputSchema: tool.inputSchema,
     async handle(given, deps, root) {
-      const input = tool.project ? (resolveProjectValues(given, deps.env ?? {}, root, "") as Record<string, unknown>) : given;
+      const input = tool.project
+        ? (resolveProjectValues(given, deps.env ?? {}, root, "", tool.multiAccount ?? false) as Record<string, unknown>)
+        : given;
       const region = parseRegion(input.region);
       const apiKey = resolveApiKey(deps.env ?? {});
       const redact = redactor(apiKey);

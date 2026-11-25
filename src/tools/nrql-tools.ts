@@ -3,7 +3,14 @@ import { isoUtc, truncateChars } from "../items.ts";
 import { normalizeMessage } from "../normalize.ts";
 import { parseWindow, requiredString, sinceClause } from "../params.ts";
 import { boundedResult, cell, flattenRow, renderLines, renderTable, type Row } from "./format.ts";
-import { ACCOUNT_PROPERTIES, accountId, APP_PROPERTY, type NerdGraphTool } from "./tool.ts";
+import {
+  ACCOUNT_PROPERTIES,
+  accountId,
+  accountIds,
+  APP_PROPERTY,
+  MULTI_ACCOUNT_PROPERTIES,
+  type NerdGraphTool,
+} from "./tool.ts";
 
 export const MAX_NRQL_ROWS = 50;
 export const MAX_GROUPS = 25;
@@ -14,17 +21,19 @@ export const MAX_LOG_CHARS = 300;
 export const nrqlQueryTool: NerdGraphTool = {
   name: "nrql_query",
   project: true,
+  multiAccount: true,
   description:
-    "Run a read-only NRQL query against one New Relic account and return up to 50 rows as a compact table.",
+    "Run a read-only NRQL query against one New Relic account, or several at once with account_ids " +
+    "(add FACET accountId() to split rows by account), and return up to 50 rows as a compact table.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
     required: ["nrql"],
-    properties: { ...ACCOUNT_PROPERTIES, nrql: { type: "string", minLength: 1, maxLength: 4000 } },
+    properties: { ...MULTI_ACCOUNT_PROPERTIES, nrql: { type: "string", minLength: 1, maxLength: 4000 } },
   },
   async run(input, ctx) {
     const nrql = requiredString(input.nrql, "nrql");
-    const results = (await ctx.client.nrql(accountId(input), nrql, ctx.signal)).map(flattenRow);
+    const results = (await ctx.client.nrql(accountIds(input), nrql, ctx.signal)).map(flattenRow);
     const columns = [...new Set(results.flatMap(row => Object.keys(row)))];
     const rows = results.map(row => Object.fromEntries(columns.map(column => [column, cell(row[column])])));
     return boundedResult({ rows, cap: MAX_NRQL_ROWS, columns, render: renderTable });
@@ -83,14 +92,16 @@ export const errorGroupsTool: NerdGraphTool = {
 export const recentLogsTool: NerdGraphTool = {
   name: "recent_logs",
   project: true,
+  multiAccount: true,
   description:
-    "Return the most recent New Relic log lines matching a NRQL WHERE filter: at most 50 lines, each message cut to 300 characters.",
+    "Return the most recent New Relic log lines matching a NRQL WHERE filter, from one account or several " +
+    "with account_ids: at most 50 lines, each message cut to 300 characters.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
     required: ["where"],
     properties: {
-      ...ACCOUNT_PROPERTIES,
+      ...MULTI_ACCOUNT_PROPERTIES,
       app: APP_PROPERTY,
       where: { type: "string", minLength: 1, maxLength: 4000, description: "NRQL WHERE body over Log" },
       window: { type: "string", pattern: "^[0-9]+(m|h)$", default: "15m" },
@@ -105,7 +116,7 @@ export const recentLogsTool: NerdGraphTool = {
       throw paramsError(`limit must be an integer from 1 to ${MAX_LOG_LINES}`);
     }
     const nrql = `SELECT timestamp, service.name, level, message FROM Log WHERE ${where} ${sinceClause(minutes)} LIMIT ${limit}`;
-    const results = await ctx.client.nrql(accountId(input), nrql, ctx.signal);
+    const results = await ctx.client.nrql(accountIds(input), nrql, ctx.signal);
     const rows: Row[] = results.map(row => ({
       timestamp: typeof row.timestamp === "number" ? new Date(row.timestamp).toISOString() : isoUtc(String(row.timestamp ?? "")),
       service: cell(row["service.name"]),

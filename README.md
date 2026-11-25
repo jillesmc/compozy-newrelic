@@ -75,8 +75,9 @@ account_id = 1234567      # positive integer; default account for sources and to
 
 Values resolve in this order, first hit wins:
 
-1. An explicit parameter: `with.app` / `with.account_id` on a source, `app` / `account_id` on a tool.
-2. `.compozy/newrelic.toml` under the workspace root.
+1. An explicit parameter: `with.app` / `with.account_id` / `with.account_ids` on a source, `app` /
+   `account_id` / `account_ids` on a tool (`account_id` wins over `account_ids`).
+2. `.compozy/newrelic.toml` under the workspace root: `accounts`, then `account_id`.
 3. `NEW_RELIC_ACCOUNT_ID` (account only; an optional standalone default).
 
 Check-in sources read the file under the poll's workspace root, so one shared `HEARTBEAT.md` with
@@ -84,18 +85,20 @@ Check-in sources read the file under the poll's workspace root, so one shared `H
 workspace (sessions running in a workspace); a call without one reads no file and uses only explicit
 parameters and `NEW_RELIC_ACCOUNT_ID`.
 
-`{{app}}` is the only placeholder, and only in `where`; the app is inserted literally. There is no
-global app fallback.
+The app is inserted literally. There is no global app fallback.
 
 The file is a deliberately narrow subset of TOML. Anything outside these rules is rejected with
 `source_params_invalid: .compozy/newrelic.toml: <reason>` (tools: `tool_invalid_input`), and no query
 is sent:
 
 - Each non-blank line is a `#` comment or `key = value`, optionally followed by a `# comment`.
-- Keys: only `app` and `account_id`, each at most once. No tables (`[...]`), arrays or inline tables.
+- Keys: letters, digits, `_` and `-`, each at most once. No tables (`[...]`) or inline tables; the
+  only array is `accounts`.
 - `app`: a `"double-quoted"` or `'single-quoted'` string of 1 to 256 characters, with no `'`, `"` or
   `\` and no escape sequences. The same 256-character and quote rules apply to `with.app` / `app`.
 - `account_id`: a positive integer written as plain digits (`1234567`; `1_234_567` is rejected).
+- `accounts`: `[<id>, <id>, ...]` on one line, 1 to 20 positive integers, no trailing comma.
+- Any other key: a quoted string with no `;`, `{{` or `}}` and no escape sequences.
 - Size: at most 4096 bytes (4 KiB).
 - `.compozy` must be a real directory and `newrelic.toml` a regular file. A symbolic link at
   `.compozy` or at `newrelic.toml` is rejected, as are FIFOs and other special files, and the file is
@@ -110,6 +113,58 @@ has no optional-env field; the extension runs without it, and status lists it as
 printf '1234567' | compozy extension secrets set newrelic --value-stdin --env NEW_RELIC_ACCOUNT_ID
 ```
 
+### Placeholders and several accounts
+
+Since 0.6.0 the file also takes `accounts` and any other string key (spec deviation D-24). This is
+for a project with no New Relic app of its own whose signals are emitted by its consumers, in more
+than one account. For example, a migration library used as a base image by many services, whose
+consumers log `global_event_name = 'MIGRATION'` in production and staging:
+
+```toml
+# <library repo>/.compozy/newrelic.toml
+accounts = [317703, 2656688]     # production and staging; queried together
+logs_where = "global_event_name = 'MIGRATION' AND level = 'ERROR'"
+logs_facet = "service_name, step"
+```
+
+A shared check-in source then picks these up, and stays silent in every project that does not set
+them:
+
+```yaml
+- id: nr-scope
+  kind: newrelic/logs
+  with:
+    where: "{{logs_where}}"
+    facet: "{{logs_facet}}"
+    window: "24h"
+    threshold: 3
+```
+
+In this library it runs `SELECT count(*) FROM Log WHERE global_event_name = 'MIGRATION' AND level =
+'ERROR' FACET accountId(), service_name, step SINCE 1440 minutes ago LIMIT 501` once over both
+accounts, and wakes the agent with items such as `317703/orders-api/apply` and
+`2656688/orders-api/apply`: the same failure in production and in staging are two items, each naming
+its account.
+
+- **Placeholders.** `{{<key>}}` in `where` and `facet` (sources and tools) is replaced by any string
+  key of the file; `with.app` / `app` still wins for `{{app}}`. The value is inserted verbatim, in a
+  single pass (an inserted value is never expanded again).
+- **A key the project does not set** (any `{{...}}` with no value, including `{{app}}` with no app
+  anywhere): the source returns no items, keeps its state, sends no query and writes one line
+  `newrelic/<kind> skipped: with.where uses {{logs_where}}; set logs_where in .compozy/newrelic.toml`
+  to `compozy extension logs newrelic` (key names only, never values). A tool fails with
+  `tool_invalid_input` and the same reason.
+- **Injection.** Values are NRQL written by whoever owns the project repository, inserted as is. A
+  value must not contain `;` (no second statement) or `{{` / `}}`, and a value is always one line.
+  `app` keeps its stricter rules because it lands inside a string literal.
+- **`accounts`.** With two or more ids, the NRQL runs once, cross-account (NerdGraph
+  `actor { nrql(accounts: [...]) }`). `newrelic/logs` and `newrelic/errors` put `accountId()` first
+  in their `FACET` and key items `<account>/<group>` (`<account>/all` without a facet);
+  `newrelic/issues` reads each account in turn and keys items `<account>/<issue id>`;
+  `newrelic/nrql` runs your NRQL as written (add `FACET accountId()` to split by account). With one
+  id, everything is exactly as with `account_id`. `nrql_query` and `recent_logs` also use `accounts`;
+  `alert_issues` and `error_groups` read one account and skip it (they use `account_id`).
+
 ### Migrating from 0.3.x
 
 **BREAKING (0.4.0): `NEW_RELIC_APP` is removed** and ignored if still set. Put `app` (and
@@ -120,7 +175,8 @@ compozy extension secrets unset newrelic --env NEW_RELIC_APP
 ```
 
 Until a project has the file (or the source passes `with.app`), a source whose `where` uses `{{app}}`
-fails with `source_params_invalid: with.where uses {{app}}; set app in .compozy/newrelic.toml or with.app`.
+returns no items (since 0.6.0; 0.4.x and 0.5.x failed with `source_params_invalid`) and logs
+`newrelic/<kind> skipped: with.where uses {{app}}; set app in .compozy/newrelic.toml or with.app`.
 The account precedence also changed: the project file's `account_id` now wins over
 `NEW_RELIC_ACCOUNT_ID`, and the investigation tools take `account_id` from the file or the env when
 omitted.
@@ -283,7 +339,8 @@ Every kind accepts these parameters:
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `account_id` | integer | `.compozy/newrelic.toml`, then `NEW_RELIC_ACCOUNT_ID` | New Relic account to query; required when neither sets one. |
+| `account_id` | integer | `.compozy/newrelic.toml`, then `NEW_RELIC_ACCOUNT_ID` | New Relic account to query; required when nothing sets an account. Wins over `account_ids`. |
+| `account_ids` | integer[] (1–20) | `accounts` in `.compozy/newrelic.toml` | Query these accounts together (see [Placeholders and several accounts](#placeholders-and-several-accounts)). |
 | `app` | string | `.compozy/newrelic.toml` | Fills `{{app}}` in `where` (see [Per-project values](#per-project-values)). |
 | `region` | `us` \| `eu` | `us` | NerdGraph endpoint (`api.newrelic.com` or `api.eu.newrelic.com`). |
 | `notify_existing` | bool | `false` | Report what is already active at the baseline. |
@@ -314,7 +371,8 @@ Windows are `<n>m` or `<n>h`, from `5m` to `24h`. The source adds `SINCE <window
 | `priorities` | string[] (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`) | `[CRITICAL, HIGH]` | Issue priorities that count. |
 | `entity_guids` | string[] | none | Only issues on these entities. |
 
-- Active: state `ACTIVATED` or `CREATED`, with a listed priority. Key: the issue id.
+- Active: state `ACTIVATED` or `CREATED`, with a listed priority. Key: the issue id (`<account>/<issue id>`
+  when several accounts are queried; each account is read in turn).
 - Order: CRITICAL > HIGH > MEDIUM > LOW, then oldest first.
 - Item: `CRITICAL issue: <incident titles>`, with priority, state, entities and activation time.
 - There is no `policy_ids` filter; see [Limitations](#limitations).
@@ -323,7 +381,7 @@ Windows are `<n>m` or `<n>h`, from `5m` to `24h`. The source adds `SINCE <window
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `where` | string | none | NRQL `WHERE` body, without the `WHERE` keyword; `{{app}}` expands to the project app. |
+| `where` | string | none | NRQL `WHERE` body, without the `WHERE` keyword; `{{app}}` and other `{{key}}` placeholders expand from the project file. |
 | `event_types` | string[] (`TransactionError`, `JavaScriptError`) | `[TransactionError]` | Event types to count. |
 | `window` | duration | `30m` | Counting window. |
 | `min_count` | integer ≥ 1 | `1` | Occurrences in the window that make an error type active. |
@@ -331,7 +389,8 @@ Windows are `<n>m` or `<n>h`, from `5m` to `24h`. The source adds `SINCE <window
 - An error type is app + `error.class` + normalized `error.message`. Digit runs, hex ids of 8 or more
   characters, UUIDs and quoted strings collapse to `#`, so `Order 123 not found` and
   `Order 456 not found` are one type.
-- Key: `app/class/<8 hex of the normalized message hash>`.
+- Key: `app/class/<8 hex of the normalized message hash>`, prefixed `<account>/` when several
+  accounts are queried.
 - Item: `TimeoutError in checkout-api: 37 in 30m`. It carries at most 160 characters of the
   normalized message and never a stack trace.
 
@@ -339,12 +398,13 @@ Windows are `<n>m` or `<n>h`, from `5m` to `24h`. The source adds `SINCE <window
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `where` | string | required | NRQL `WHERE` body over `Log`; `{{app}}` expands to the project app. |
-| `facet` | string | none | Attribute to group by (for example `service.name`). |
+| `where` | string | required | NRQL `WHERE` body over `Log`; `{{app}}` and other `{{key}}` placeholders expand from the project file. |
+| `facet` | string | none | Attributes to group by, comma-separated (for example `service.name` or `service_name, step`); placeholders expand. |
 | `window` | duration | `15m` | Counting window. |
 | `threshold` | integer ≥ 0 | required | Lines in the window that make a group active (strict `>`). |
 
-- Key: the facet value, or `all` without `facet`. A facet that does not exist returns no rows, so
+- Key: the facet values joined with `/` (`orders-api/apply`), or `all` without `facet`; prefixed
+  `<account>/` when several accounts are queried. A facet that does not exist returns no rows, so
   nothing breaches.
 - Item: `payments: 120 log lines in 15m (threshold 50)`. Items carry counts and facet values only,
   never log lines.
@@ -385,7 +445,8 @@ No new config keys. The existing `[agents.heartbeat.sources]` keys apply:
 | `agents.heartbeat.sources.max_state_bytes` | 16384 | The whole active set must fit. A source with more active signals fails with `source_params_invalid` (`<n> active signals do not fit max_state_bytes=…; narrow the source`); it never truncates. |
 | `agents.heartbeat.sources.timeout` | 30 s | One poll's deadline. Each poll stays under 25 s and each request under 10 s. |
 
-Each poll runs one NRQL query (`newrelic/nrql`, `errors`, `logs`) or one to 20 issue pages.
+Each poll runs one NRQL query (`newrelic/nrql`, `errors`, `logs`, also when cross-account) or one to
+20 issue pages per account.
 A `min_interval` of 5 minutes or more is a sensible floor.
 
 ### Errors
@@ -397,10 +458,10 @@ A `min_interval` of 5 minutes or more is a sensible floor.
 | 429 | `source_rate_limited` | `New Relic rate limit reached; retry later` |
 | NRQL or GraphQL error | `source_params_invalid` | `New Relic rejected the query: <message, at most 300 characters>` |
 | No `account_id` anywhere | `source_params_invalid` | `set with.account_id, account_id in .compozy/newrelic.toml, or NEW_RELIC_ACCOUNT_ID` |
-| `{{app}}` in `where` with no app | `source_params_invalid` | `with.where uses {{app}}; set app in .compozy/newrelic.toml or with.app` |
+| `{{key}}` in `where` or `facet` that nothing sets | none: no items, state kept, one `skipped` log line | `with.where uses {{app}}; set app in .compozy/newrelic.toml or with.app` |
 | App with `'`, `"` or `\` | `source_params_invalid` | `with.app must not contain quotes or backslashes` (or `.compozy/newrelic.toml: app ...`) |
 | Malformed `.compozy/newrelic.toml` | `source_params_invalid` | `.compozy/newrelic.toml: <reason>` |
-| No access to `account_id` | `source_params_invalid` | `this API key cannot read account 1234567` |
+| No access to `account_id` | `source_params_invalid` | `this API key cannot read account 1234567` (several: `cannot read every account of 317703, 2656688`) |
 | NRQL result not one number per row | `source_params_invalid` | `nrql must return one number per row (e.g. SELECT count(*) ... FACET x)` |
 | More than 500 rows | `source_params_invalid` | `nrql returned more than 500 rows; add LIMIT or narrow the FACET` |
 | Active set over `max_state_bytes` | `source_params_invalid` | `<n> active signals do not fit max_state_bytes=16384; narrow the source` |
@@ -470,12 +531,12 @@ default, or `eu`).
 
 | Tool | Input | Returns |
 | --- | --- | --- |
-| `ext__newrelic__nrql_query` | `nrql`, `account_id?` | Up to 50 rows as a compact table; nested aggregates become dotted columns (`percentile.duration.95`). |
+| `ext__newrelic__nrql_query` | `nrql`, `account_id?`, `account_ids?` (1–20; cross-account, add `FACET accountId()` to split) | Up to 50 rows as a compact table; nested aggregates become dotted columns (`percentile.duration.95`). |
 | `ext__newrelic__list_accounts` | — | Up to 50 `{id, name}`. |
 | `ext__newrelic__search_entities` | `query` (a name, or a NerdGraph entity search such as `domain = 'APM' AND name LIKE 'checkout'`) | Up to 25 `{guid, name, type, domain, alert_severity}`. |
 | `ext__newrelic__alert_issues` | `account_id?`, `state?` (`open` default, `closed`, `all`), `priorities?`, `since?` (≤ `24h`) | Up to 25 `{id, title, priority, state, entities, opened_at, url}`, highest priority and newest first; `url` opens that issue. |
 | `ext__newrelic__error_groups` | `account_id?`, `app?`, `where?`, `window?` (`30m` default) | Up to 25 `{app, class, message (≤ 160), count, last_seen}`, most frequent first. |
-| `ext__newrelic__recent_logs` | `account_id?`, `app?`, `where`, `window?` (`15m` default), `limit?` (1–50, default 20) | Lines `{timestamp, service, level, message (≤ 300)}`. |
+| `ext__newrelic__recent_logs` | `account_id?`, `account_ids?` (1–20), `app?`, `where`, `window?` (`15m` default), `limit?` (1–50, default 20) | Lines `{timestamp, service, level, message (≤ 300)}`. |
 | `ext__newrelic__mcp_tools` | `query?`, `limit?` (1–60, default 60) | The official MCP tools usable with the key; see [the proxy](#official-mcp-via-the-api-key-proxy). |
 | `ext__newrelic__mcp_call` | `tool`, `arguments?` (≤ 64 KiB) | One official MCP tool's result, text ≤ 16 KiB. |
 | `ext__newrelic__doctor` | — | The doctor report. It is an operator command; its description tells agents not to call it. |
@@ -716,6 +777,10 @@ manual server and the extension keep separate secrets, so they can coexist while
   `errorClass`/`errorMessage` instead of `error.class`/`error.message`, their class and message read
   as `null`.
 - **No JP region.** Only `us` and `eu`.
+- **Cross-account `recent_logs` lines do not name their account.** Query one account at a time
+  when that matters, or use `nrql_query` with `FACET accountId()`.
+- **All accounts of a cross-account query share one region.** NerdGraph serves one region per
+  request.
 - The `aiIssues` field names follow New Relic's public docs and still need a check against a real
   account (D-4).
 

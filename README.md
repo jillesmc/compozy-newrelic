@@ -12,7 +12,8 @@ A [CompozyOS](https://github.com/compozy/compozy) extension named `newrelic`. It
 - **An API-key proxy to the official New Relic MCP** (`ext__newrelic__mcp_tools` and
   `ext__newrelic__mcp_call`). Agents list and call every official MCP tool that works with the bound
   key, and never see one that cannot.
-- **The official New Relic MCP via OAuth** (`newrelic` and `newrelic-eu`), for the OAuth-only tools.
+- **The official New Relic MCP via OAuth** (`newrelic`, US; EU accounts add `newrelic-eu` by hand),
+  for the OAuth-only tools.
   Its tools reach agents only after a successful OAuth sign-in on an account that can use them.
 
 A `doctor` command tells you, without spending agent tokens, whether your account can use the
@@ -511,7 +512,7 @@ Recovery: run compozy extension secrets set newrelic --env NEW_RELIC_API_KEY
 | NerdGraph investigation tools (`ext__newrelic__*`) | yes | yes | User API key |
 | Doctor | yes | yes | User API key |
 | Official MCP through the proxy (`mcp_tools`, `mcp_call`) | no: `mcp_unavailable` | yes, read-only tools that work with the key | User API key |
-| Official MCP (`newrelic`, `newrelic-eu`) | no | yes, with the role and admin toggle below | OAuth sign-in |
+| Official MCP (`newrelic`; `newrelic-eu` by hand) | no | yes, with the role and admin toggle below | OAuth sign-in |
 | OAuth-only MCP tools (for example `natural_language_to_nrql_query`) | no | yes | OAuth sign-in |
 
 On a free account, or one where the MCP is not enabled, the proxy tools answer `mcp_unavailable` at
@@ -615,8 +616,21 @@ in with OAuth only if agents need the OAuth-only tools, once per scope, when the
 
 ```bash
 compozy mcp auth login newrelic --owner extension:newrelic
-# EU accounts:
-compozy mcp auth login newrelic-eu --owner extension:newrelic
+```
+
+The extension declares only the US server. EU accounts declare `newrelic-eu` in
+`~/.compozy/config.toml` with the same public client, then sign in to it:
+
+```toml
+[[mcp_servers]]
+name = "newrelic-eu"
+transport = "http"
+url = "https://mcp.eu.newrelic.com/mcp/"
+auth = { registration = "pre_registered", issuer_url = "https://oauth2.service.newrelic.com", client_id = "pUWGgnjsQ0bydqCbavTPpw==", scopes = ["observability:read", "offline_access"] }
+```
+
+```bash
+compozy mcp auth login newrelic-eu --scope user
 ```
 
 Use the scope where you installed the extension: the default `--scope user` matches a global
@@ -670,7 +684,7 @@ proxy replaces it: every tool you used through it, except the OAuth-only ones, i
    `state: "available"` and the tools you used before.
 
 OAuth-only tools (such as `natural_language_to_nrql_query`) stay reachable only through the OAuth
-servers `newrelic` and `newrelic-eu` (see [Official MCP via OAuth](#official-mcp-via-oauth)). The
+servers `newrelic` and, for EU, `newrelic-eu` (see [Official MCP via OAuth](#official-mcp-via-oauth)). The
 manual server and the extension keep separate secrets, so they can coexist while you migrate.
 
 ## Cost model

@@ -47,14 +47,13 @@ describe("manifest", () => {
     assertDescribe(payload);
   });
 
-  test("UT-110 manifest: OAuth MCP servers newrelic and newrelic-eu use the pre-registered public client, no headers", () => {
+  test("UT-110 manifest: the OAuth MCP server newrelic (US only) uses the pre-registered public client, no headers", () => {
     assert.deepEqual(MCP_SERVERS, {
       newrelic: { transport: "http", url: "https://mcp.newrelic.com/mcp/", default_scope: "global", auth: AUTH },
-      "newrelic-eu": { transport: "http", url: "https://mcp.eu.newrelic.com/mcp/", default_scope: "global", auth: AUTH },
     });
     const toml = mcpServersToml();
     assert.doesNotMatch(toml, /headers|api[-_]key|secret/i);
-    for (const [name, url] of [["newrelic", "https://mcp.newrelic.com/mcp/"], ["newrelic-eu", "https://mcp.eu.newrelic.com/mcp/"]]) {
+    for (const [name, url] of [["newrelic", "https://mcp.newrelic.com/mcp/"]]) {
       assert.ok(
         toml.includes(
           [
@@ -93,8 +92,8 @@ describe("manifest", () => {
         assert.deepEqual([...toml.matchAll(/^\s*id = "(ext__newrelic__\w+)"$/gm)].map(m => m[1]).sort(), TOOL_IDS);
         assert.deepEqual([...toml.matchAll(/^\s*\[resources\.tools\.(\w+)\.command\]$/gm)].map(m => m[1]), ["doctor"]);
         assert.match(toml, /^\s*verb = "doctor"$/m);
-        assert.ok(toml.includes(mcpServersToml()), "both OAuth MCP servers are appended");
-        assert.deepEqual([...toml.matchAll(/^\[resources\.mcp_servers\.([\w-]+)\]$/gm)].map(m => m[1]), ["newrelic", "newrelic-eu"]);
+        assert.ok(toml.includes(mcpServersToml()), "the OAuth MCP server is appended");
+        assert.deepEqual([...toml.matchAll(/^\[resources\.mcp_servers\.([\w-]+)\]$/gm)].map(m => m[1]), ["newrelic"]);
 
         const validate = spawnSync("compozy", ["extension", "validate", releaseDir, "-o", "json"], { encoding: "utf8" });
         assert.equal(validate.status, 0, `validate: ${validate.stdout}${validate.stderr}`);

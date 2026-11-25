@@ -533,3 +533,11 @@ S2 and S3 can run in parallel after S1.
   exactly; non-integers of magnitude ≥ 100000 print with at most 2 decimals; smaller values keep 6
   significant digits. When the NRQL breach text would show the threshold and the value as equal
   although they differ, both print exactly. Attributes are unchanged (always exact).
+- **D-23 (2026-11-25, operator request, recorded before coding): only the US OAuth server is
+  declared.** The manifest drops `newrelic-eu`. A CompozyOS extension manifest has no `disabled`
+  field for `mcp_servers`, so a declared EU server cannot ship switched off, and on US accounts it
+  stayed `needs_login` and reported an unhealthy extension MCP server. EU accounts declare
+  `newrelic-eu` by hand in `config.toml` (README, Official MCP via OAuth) with the same
+  pre-registered client; the proxy's `oauth_only` recovery keeps naming `newrelic-eu` for `region:
+  eu`, which matches that manual name. Supersedes the `newrelic-eu` declaration in
+  `newrelic-sources` (spec item 4, ADR-002 decision 2, US-104 AC-1).

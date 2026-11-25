@@ -7,6 +7,9 @@
  * secret); its DCR endpoint returns that same id, so dynamic registration adds nothing.
  * `default_scope = "global"` lets a plain `compozy extension install` (no `--scope`) install for all
  * projects; `--scope workspace` still selects one workspace (spec deviation D-16).
+ * Only the US server is declared: an extension manifest cannot ship a server switched off, and an
+ * EU server nobody signs in to shows as an unhealthy MCP server. EU accounts declare `newrelic-eu`
+ * by hand (README, Official MCP via OAuth).
  */
 export interface McpServerDeclaration {
   transport: "http";
@@ -31,7 +34,6 @@ const AUTH: McpServerDeclaration["auth"] = {
 
 export const MCP_SERVERS: Readonly<Record<string, McpServerDeclaration>> = {
   newrelic: { transport: "http", url: "https://mcp.newrelic.com/mcp/", default_scope: "global", auth: AUTH },
-  "newrelic-eu": { transport: "http", url: "https://mcp.eu.newrelic.com/mcp/", default_scope: "global", auth: AUTH },
 };
 
 const str = (value: string): string => JSON.stringify(value);
